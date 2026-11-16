@@ -1,0 +1,232 @@
+@use './variables.scss';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-sans);
+  background-color: var(--bg-cream);
+  color: var(--charcoal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: var(--bg-cream);
+  background-image:
+    radial-gradient(rgba(199, 166, 106, 0.12) 1px, transparent 1px),
+    radial-gradient(rgba(24, 61, 50, 0.05) 1px, var(--bg-cream) 1px);
+  background-size: 28px 28px;
+  background-position: 0 0, 14px 14px;
+  color: var(--charcoal);
+  line-height: 1.55;
+  overflow-x: hidden;
+}
+
+/* Subtle analog paper noise overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+/* Reusable Vintage Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.8rem 1.45rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  white-space: nowrap;
+
+  &:disabled {
+    opacity: 0.52;
+    cursor: not-allowed;
+    transform: none !important;
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
+  }
+}
+
+.btn-primary {
+  background: var(--forest-green);
+  color: var(--bg-cream);
+  box-shadow: 0 4px 14px rgba(24, 61, 50, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--forest-green-dark);
+
+  &:hover:not(:disabled) {
+    background: var(--forest-green-light);
+    box-shadow: 0 6px 20px rgba(24, 61, 50, 0.34);
+  }
+}
+
+.btn-red {
+  background: var(--xmas-red);
+  color: var(--bg-cream);
+  box-shadow: 0 4px 14px rgba(181, 59, 53, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--xmas-red-dark);
+
+  &:hover:not(:disabled) {
+    background: var(--xmas-red-light);
+  }
+}
+
+.btn-gold {
+  background: var(--muted-gold);
+  color: var(--charcoal);
+  border: 1px solid var(--muted-gold-dark);
+  box-shadow: 0 4px 12px rgba(199, 166, 106, 0.28);
+
+  &:hover:not(:disabled) {
+    background: var(--muted-gold-light);
+  }
+}
+
+.btn-outline {
+  background: rgba(250, 247, 240, 0.75);
+  color: var(--forest-green);
+  border: 1.5px solid var(--charcoal-border);
+
+  &:hover:not(:disabled) {
+    border-color: var(--forest-green);
+    background: var(--bg-cream-elevated);
+  }
+}
+
+/* Film Sprocket Strip Decoration */
+.film-sprocket-bar {
+  height: 18px;
+  background-color: var(--charcoal);
+  background-image: radial-gradient(circle, var(--bg-cream) 3.5px, transparent 4px);
+  background-size: 24px 18px;
+  background-repeat: repeat-x;
+  background-position: center;
+}
+
+/* Analog Card */
+.retro-card {
+  background: var(--bg-cream-elevated);
+  border: 1.5px solid var(--charcoal-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  position: relative;
+}
+
+/* Status Pill Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-green {
+  background: var(--forest-green-subtle);
+  color: var(--forest-green);
+  border: 1px solid rgba(24, 61, 50, 0.25);
+}
+
+.badge-red {
+  background: var(--xmas-red-subtle);
+  color: var(--xmas-red);
+  border: 1px solid rgba(181, 59, 53, 0.25);
+}
+
+.badge-gold {
+  background: var(--muted-gold-subtle);
+  color: #7D5E26;
+  border: 1px solid rgba(199, 166, 106, 0.45);
+}
+
+/* Form Elements */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1.15rem;
+}
+
+.form-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--charcoal-soft);
+  font-family: var(--font-mono);
+}
+
+.form-input {
+  width: 100%;
+  padding: 0.82rem 1rem;
+  background: var(--bg-cream);
+  border: 1.5px solid rgba(37, 37, 37, 0.22);
+  border-radius: var(--radius-md);
+  color: var(--charcoal);
+  transition: border-color 0.2s, box-shadow 0.2s;
+
+  &:focus {
+    outline: none;
+    border-color: var(--forest-green);
+    box-shadow: 0 0 0 3px rgba(24, 61, 50, 0.14);
+    background: #fff;
+  }
+
+  &::placeholder {
+    color: var(--charcoal-muted);
+    opacity: 0.7;
+  }
+}
+

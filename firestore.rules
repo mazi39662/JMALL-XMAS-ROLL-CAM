@@ -1,0 +1,190 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Check if the authenticated user is a verified Admin
+    // Checks either custom claim `admin == true` OR presence in `admins/{uid}` collection
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Helper: Validate event state for registration / camera / photo submission
+    function getEvent(eventId) {
+      return get(/databases/$(database)/documents/events/$(eventId)).data;
+    }
+
+    // Helper: Expected deterministic photo document path for a given session and shot number
+    function deterministicPhotoPath(sessionId, shotNumber) {
+      return /databases/$(database)/documents/photos/$(sessionId + '_shot_' + string(shotNumber));
+    }
+
+    // =========================================================================
+    // 1. ADMINS COLLECTION
+    // =========================================================================
+    match /admins/{adminUid} {
+      allow read: if request.auth != null && request.auth.uid == adminUid;
+      allow write: if false; // Managed via Firebase Console only
+    }
+
+    // =========================================================================
+    // 2. EVENTS COLLECTION
+    // =========================================================================
+    match /events/{eventId} {
+      // Anyone can read basic event details (name, date, status flags)
+      allow read: if true;
+      // Only authenticated admins can create or update event settings
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 3. GUESTS COLLECTION
+    //    Guests can register when registrationOpen == true, and read their own doc
+    //    by direct ID lookup (get), NOT list/query other guests' private registration details.
+    // =========================================================================
+    match /guests/{guestId} {
+      // Guests cannot list or query other guests' private registration records
+      allow get: if true;
+      allow list: if isAdmin();
+
+      // Create registration:
+      // - Event registration must be open
+      // - Initial totalShots must be exactly 10, usedShots must be 0
+      // - Media agreement must be accepted
+      allow create: if getEvent(request.resource.data.eventId).registrationOpen == true
+                    && request.resource.data.fullName is string
+                    && request.resource.data.fullName.size() >= 2
+                    && request.resource.data.fullName.size() <= 100
+                    && request.resource.data.totalShots == 10
+                    && request.resource.data.usedShots == 0
+                    && request.resource.data.mediaAgreement == true;
+
+      // Update guest doc:
+      // - Guests CANNOT arbitrarily modify their own shot counter or identity fields
+      // - Guests can ONLY increment usedShots by +1 up to 10 as part of an atomic transaction
+      //   that simultaneously creates the deterministic photo document for that exact shot!
+      allow update: if isAdmin() || (
+        request.resource.data.fullName == resource.data.fullName &&
+        request.resource.data.eventId == resource.data.eventId &&
+        request.resource.data.cameraSessionId == resource.data.cameraSessionId &&
+        request.resource.data.contactNumber == resource.data.contactNumber &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.totalShots == 10 &&
+        request.resource.data.usedShots == resource.data.usedShots + 1 &&
+        request.resource.data.usedShots <= 10 &&
+        !exists(deterministicPhotoPath(resource.data.cameraSessionId, request.resource.data.usedShots)) &&
+        existsAfter(deterministicPhotoPath(resource.data.cameraSessionId, request.resource.data.usedShots))
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 4. DUPLICATE REGISTRATION LOCKS
+    //    Deterministic document ID: `{eventId}_{normalizedKey}`
+    //    Prevents duplicate registrations for the same guest name / email / phone.
+    // =========================================================================
+    match /guestLocks/{lockId} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if !exists(/databases/$(database)/documents/guestLocks/$(lockId));
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 5. CAMERA SESSIONS COLLECTION
+    //    Enforces strict 10-shot cap server-side via atomic transaction.
+    // =========================================================================
+    match /cameraSessions/{sessionId} {
+      allow get: if true;
+      allow list: if isAdmin();
+
+      allow create: if request.resource.data.totalShots == 10
+                    && request.resource.data.usedShots == 0
+                    && request.resource.data.guestId is string
+                    && request.resource.data.eventId is string;
+
+      // Atomic shot increment:
+      // - Only allows incrementing `usedShots` by +1 in lockstep with creating the photo doc
+      // - Never exceeds `totalShots` (10)
+      // - Never allows decrementing or resetting `usedShots`
+      // - Event must have cameraEnabled == true and photoSubmissionOpen == true
+      allow update: if isAdmin() || (
+        getEvent(resource.data.eventId).cameraEnabled == true &&
+        getEvent(resource.data.eventId).photoSubmissionOpen == true &&
+        request.resource.data.guestId == resource.data.guestId &&
+        request.resource.data.eventId == resource.data.eventId &&
+        request.resource.data.totalShots == 10 &&
+        request.resource.data.usedShots == resource.data.usedShots + 1 &&
+        request.resource.data.usedShots <= 10 &&
+        !exists(deterministicPhotoPath(sessionId, request.resource.data.usedShots)) &&
+        existsAfter(deterministicPhotoPath(sessionId, request.resource.data.usedShots))
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 6. PHOTOS COLLECTION (Compressed Base64 JPEG Images Only)
+    //    Deterministic photo ID: `{sessionId}_shot_{shotNumber}`
+    //    Each photo is stored in its own document (never all 10 in one guest doc).
+    //    Validates required fields, Base64 JPEG format, dimensions <= 1920x1920,
+    //    and conservative ~700 KiB payload limit (well below Firestore's 1 MiB cap).
+    // =========================================================================
+    match /photos/{photoId} {
+      // Only authorized admins can access the complete (including hidden/moderated) gallery;
+      // guests can read active/visible photos.
+      allow read: if isAdmin() || resource.data.status in ['active', 'visible'];
+
+      // Create compressed photo document:
+      // - Deterministic ID `{sessionId}_shot_{shotNumber}` must not already exist
+      // - Must be committed atomically with cameraSessions/{sessionId} shot increment
+      // - shotNumber must be an integer between 1 and 10
+      // - compressedImage must be a Base64 JPEG data URL bounded within ~700 KiB
+      // - Never allows storing raw HD original blobs in Firestore
+      allow create: if !exists(/databases/$(database)/documents/photos/$(photoId))
+                    && getEvent(request.resource.data.eventId).cameraEnabled == true
+                    && getEvent(request.resource.data.eventId).photoSubmissionOpen == true
+                    && request.resource.data.id == photoId
+                    && request.resource.data.eventId is string
+                    && request.resource.data.guestId is string
+                    && request.resource.data.sessionId is string
+                    && photoId == (request.resource.data.sessionId + '_shot_' + string(request.resource.data.shotNumber))
+                    && request.resource.data.shotNumber is int
+                    && request.resource.data.shotNumber >= 1
+                    && request.resource.data.shotNumber <= 10
+                    && getAfter(/databases/$(database)/documents/cameraSessions/$(request.resource.data.sessionId)).data.usedShots == request.resource.data.shotNumber
+                    && request.resource.data.compressedImage is string
+                    && request.resource.data.compressedImage.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$')
+                    && request.resource.data.compressedImage.size() <= 730000
+                    && request.resource.data.imageFormat == 'image/jpeg'
+                    && request.resource.data.width is int
+                    && request.resource.data.width > 0
+                    && request.resource.data.width <= 1920
+                    && request.resource.data.height is int
+                    && request.resource.data.height > 0
+                    && request.resource.data.height <= 1920
+                    && request.resource.data.sizeBytes is int
+                    && request.resource.data.sizeBytes > 0
+                    && request.resource.data.sizeBytes <= 716800
+                    && request.resource.data.capturedAt is timestamp
+                    && request.resource.data.uploadedAt is timestamp
+                    && request.resource.data.status in ['active', 'visible']
+                    && !('originalBlob' in request.resource.data)
+                    && !('imageBlob' in request.resource.data);
+
+      // Guests CANNOT modify or delete any photo record (own or another guest's).
+      // Only authorized Admins can moderate status ('active' | 'visible' | 'hidden') or delete.
+      allow update: if isAdmin()
+                    && request.resource.data.guestId == resource.data.guestId
+                    && request.resource.data.eventId == resource.data.eventId
+                    && request.resource.data.compressedImage == resource.data.compressedImage
+                    && request.resource.data.status in ['active', 'visible', 'hidden'];
+
+      allow delete: if isAdmin();
+    }
+  }
+}

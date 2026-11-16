@@ -1,0 +1,52 @@
+:root {
+  /* Core Palette — Retro Christmas Disposable Camera */
+  --bg-cream: #F5F0E6;
+  --bg-cream-elevated: #FAF7F0;
+  --bg-cream-muted: #EAE2D3;
+  --bg-cream-deep: #DDD2BE;
+
+  --forest-green: #183D32;
+  --forest-green-dark: #102A22;
+  --forest-green-light: #245849;
+  --forest-green-subtle: rgba(24, 61, 50, 0.09);
+
+  --xmas-red: #B53B35;
+  --xmas-red-dark: #8F2B26;
+  --xmas-red-light: #CF4E48;
+  --xmas-red-subtle: rgba(181, 59, 53, 0.1);
+
+  --muted-gold: #C7A66A;
+  --muted-gold-dark: #A58449;
+  --muted-gold-light: #DFC492;
+  --muted-gold-subtle: rgba(199, 166, 106, 0.16);
+
+  --charcoal: #252525;
+  --charcoal-soft: #3A3835;
+  --charcoal-muted: #68635B;
+  --charcoal-border: rgba(37, 37, 37, 0.14);
+
+  /* Camera Body Materials */
+  --cam-body-outer: #1A1C1B;
+  --cam-body-grip: #232625;
+  --cam-wrapper-green: #183D32;
+  --cam-lcd-bg: #8C9681;
+  --cam-lcd-text: #1B2218;
+  --cam-amber-stamp: #FF8A2B;
+
+  /* Typography */
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Space Mono', monospace;
+
+  /* Radii & Shadows */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 30px;
+  --radius-pill: 9999px;
+
+  --shadow-soft: 0 8px 28px -6px rgba(24, 61, 50, 0.1), 0 2px 6px -1px rgba(37, 37, 37, 0.06);
+  --shadow-card: 0 12px 34px -8px rgba(37, 37, 37, 0.12), 0 4px 10px -2px rgba(37, 37, 37, 0.06);
+  --shadow-camera: 0 24px 56px -12px rgba(0, 0, 0, 0.45), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+}
+

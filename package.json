@@ -1,0 +1,36 @@
+{
+  "name": "xmas-roll",
+  "private": true,
+  "version": "1.0.0",
+  "description": "XMAS ROLL — Christmas Party Digital Disposable Camera Web App",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "firebase": "^11.0.2",
+    "jszip": "^3.10.1",
+    "lucide-vue-next": "^0.462.0",
+    "pinia": "^2.2.8",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/qrcode": "^1.5.5",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^25.0.1",
+    "sass-embedded": "^1.81.0",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^2.1.10"
+  }
+}
+
