@@ -925,7 +925,7 @@ async function handleDiscardPending(photoId: string) {
 /* PHOTO CARDS GRID */
 .contact-sheet-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.75rem;
 }
 
@@ -964,7 +964,7 @@ async function handleDiscardPending(photoId: string) {
 
 .frame-img-wrap {
   width: 100%;
-  aspect-ratio: 3 / 4;
+  aspect-ratio: 2 / 3;
   border-radius: 6px;
   overflow: hidden;
   background: #0d0f0e;
@@ -1103,7 +1103,9 @@ async function handleDiscardPending(photoId: string) {
 
 .lightbox-img-box {
   width: 100%;
-  max-height: 56dvh;
+  max-width: min(100%, calc(56dvh * 2 / 3));
+  aspect-ratio: 2 / 3;
+  margin: 0 auto;
   background: #101211;
   border-radius: 10px;
   overflow: hidden;
@@ -1112,9 +1114,10 @@ async function handleDiscardPending(photoId: string) {
   justify-content: center;
 
   img {
-    max-width: 100%;
-    max-height: 56dvh;
-    object-fit: contain;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
   }
 }
 

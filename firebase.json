@@ -1,7 +1,23 @@
 {
   "firestore": {
     "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
+    "indexes": "firestore.indexes.json",
+    "database": "(default)",
+    "location": "asia-southeast1"
+  },
+  "auth": {
+    "providers": {
+      "anonymous": true,
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "XMAS ROLL",
+        "supportEmail": "mazi39662@gmail.com",
+        "authorizedRedirectUris": [
+          "https://jmall-xmas-roll.firebaseapp.com/__/auth/handler",
+          "http://localhost"
+        ]
+      }
+    }
   },
   "hosting": {
     "public": "dist",
@@ -18,4 +34,3 @@
     ]
   }
 }
-

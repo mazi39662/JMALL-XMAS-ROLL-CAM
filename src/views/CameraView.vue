@@ -265,7 +265,7 @@ async function handleDiscardInterruptedUpload(photoId: string) {
             <canvas
               v-show="permissionStatus !== 'granted'"
               ref="fallbackCanvasRef"
-              width="720"
+              width="640"
               height="960"
               class="viewfinder-canvas"
               :class="[`preset-${filmConfig.warmthPreset}`]"
@@ -850,13 +850,15 @@ async function handleDiscardInterruptedUpload(photoId: string) {
   padding: 5px;
   border-radius: 16px;
   border: 1.5px solid #2b302e;
+  width: 100%;
+  max-width: min(100%, calc(52dvh * 2 / 3));
+  margin: 0 auto;
 }
 
 .viewfinder-viewport {
   position: relative;
   width: 100%;
-  aspect-ratio: 3 / 4;
-  max-height: 48dvh;
+  aspect-ratio: 2 / 3;
   border-radius: 12px;
   overflow: hidden;
   background: #090b0a;
@@ -1568,8 +1570,9 @@ async function handleDiscardInterruptedUpload(photoId: string) {
 
 .preview-image-frame {
   width: 100%;
-  aspect-ratio: 3 / 4;
-  max-height: 48dvh;
+  max-width: min(100%, calc(52dvh * 2 / 3));
+  aspect-ratio: 2 / 3;
+  margin: 0 auto;
   background: #101211;
   border-radius: 10px;
   overflow: hidden;
@@ -1577,7 +1580,7 @@ async function handleDiscardInterruptedUpload(photoId: string) {
   .preview-img {
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    object-fit: cover;
     display: block;
   }
 }

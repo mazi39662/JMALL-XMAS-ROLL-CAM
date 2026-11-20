@@ -1,18 +1,20 @@
 import JSZip from 'jszip'
-import type { LocalOriginalPhotoRecord, LocalUploadStatus } from '@/types'
+import type { LocalOriginalPhotoRecord, LocalUploadStatus, PhotoRecord } from '@/types'
 
 /**
  * Dedicated IndexedDB Local Storage Service for HD Originals
  * Database: xmas_roll_db
  * Object Store: original_photos
+ * Fallback Object Store (when Firebase is not configured): local_firestore_photos
  *
  * Preserves full-resolution HD original Blobs locally on the guest's device.
  * Never uses localStorage for binary image storage.
  */
 
 export const IDB_DATABASE_NAME = 'xmas_roll_db'
-export const IDB_DATABASE_VERSION = 1
+export const IDB_DATABASE_VERSION = 2
 export const ORIGINAL_PHOTOS_STORE = 'original_photos'
+export const LOCAL_FIRESTORE_PHOTOS_STORE = 'local_firestore_photos'
 
 export class IndexedDbUnavailableError extends Error {
   constructor(
@@ -73,6 +75,9 @@ export function openXmasRollDatabase(): Promise<IDBDatabase> {
           store.createIndex('by_eventId', 'eventId', { unique: false })
           store.createIndex('by_photoId', 'photoId', { unique: false })
           store.createIndex('by_uploadStatus', 'uploadStatus', { unique: false })
+        }
+        if (!db.objectStoreNames.contains(LOCAL_FIRESTORE_PHOTOS_STORE)) {
+          db.createObjectStore(LOCAL_FIRESTORE_PHOTOS_STORE, { keyPath: 'id' })
         }
       }
 
@@ -560,7 +565,55 @@ export async function downloadAllGuestHdOriginalsAsZip(
 }
 
 /**
- * Clears all records in `xmas_roll_db.original_photos` (used in unit/integration test resets).
+ * Persists a compressed PhotoRecord in IndexedDB when testing locally without Firebase configured.
+ */
+export async function saveLocalFallbackPhotoRecord(photo: PhotoRecord): Promise<void> {
+  if (!isIndexedDbAvailable()) return
+  try {
+    const db = await openXmasRollDatabase()
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(LOCAL_FIRESTORE_PHOTOS_STORE, 'readwrite')
+      tx.objectStore(LOCAL_FIRESTORE_PHOTOS_STORE).put(photo)
+      tx.oncomplete = () => {
+        db.close()
+        resolve()
+      }
+      tx.onerror = () => {
+        db.close()
+        resolve()
+      }
+    })
+  } catch {
+    // Ignore fallback persistence errors if IndexedDB is disabled
+  }
+}
+
+/**
+ * Loads all compressed PhotoRecords from IndexedDB when testing locally without Firebase configured.
+ */
+export async function getAllLocalFallbackPhotoRecords(): Promise<PhotoRecord[]> {
+  if (!isIndexedDbAvailable()) return []
+  try {
+    const db = await openXmasRollDatabase()
+    return await new Promise<PhotoRecord[]>((resolve) => {
+      const tx = db.transaction(LOCAL_FIRESTORE_PHOTOS_STORE, 'readonly')
+      const req = tx.objectStore(LOCAL_FIRESTORE_PHOTOS_STORE).getAll()
+      req.onsuccess = () => {
+        db.close()
+        resolve((req.result || []) as PhotoRecord[])
+      }
+      req.onerror = () => {
+        db.close()
+        resolve([])
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Clears all records in `xmas_roll_db` (used in unit/integration test resets).
  */
 export async function clearIndexedDbForTesting(): Promise<void> {
   if (!isIndexedDbAvailable()) return
@@ -570,8 +623,16 @@ export async function clearIndexedDbForTesting(): Promise<void> {
       const tx = db.transaction(ORIGINAL_PHOTOS_STORE, 'readwrite')
       tx.objectStore(ORIGINAL_PHOTOS_STORE).clear()
       tx.oncomplete = () => {
-        db.close()
-        resolve()
+        const tx2 = db.transaction(LOCAL_FIRESTORE_PHOTOS_STORE, 'readwrite')
+        tx2.objectStore(LOCAL_FIRESTORE_PHOTOS_STORE).clear()
+        tx2.oncomplete = () => {
+          db.close()
+          resolve()
+        }
+        tx2.onerror = () => {
+          db.close()
+          resolve()
+        }
       }
       tx.onerror = () => {
         db.close()

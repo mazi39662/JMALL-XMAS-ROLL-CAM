@@ -35,8 +35,17 @@ import {
 } from '@/services/imageProcessor'
 import * as storageAdapterModule from '@/services/storageAdapter'
 import { buildExportFilename, generateEventPhotosZipBlob } from '@/services/zipExporter'
-import { signInAdmin, signOutAdmin } from '@/services/adminAuth'
-import { formatDisposableDateStamp } from '@/services/filmProcessor'
+import {
+  signInAdmin,
+  signInAdminWithGoogle,
+  signInGuestWithGoogle,
+  signOutAdmin
+} from '@/services/adminAuth'
+import { firebaseConfig, googleProvider } from '@/services/firebase'
+import {
+   computeCenterCrop3x2,
+  formatDisposableDateStamp
+} from '@/services/filmProcessor'
 
 function createValidJpegBlob(content = 'fake-jpeg-binary-content'): Blob {
   return new Blob([content], { type: 'image/jpeg' })
@@ -396,20 +405,21 @@ describe('XMAS ROLL — End-to-End Domain & Dual Image Storage Verification', ()
     await signOutAdmin()
   })
 
-  it('10. Verifies Image Processing: 75% JPEG quality, max 1920x1920 aspect ratio, and original preservation', async () => {
-    // Aspect ratio & orientation preservation
-    expect(calculateAspectRatioDimensions(3000, 4000, MAX_COMPRESSED_DIMENSION)).toEqual({
-      width: 1440,
+  it('10. Verifies Image Processing: 75% JPEG quality, strict 3 height x 2 width (2:3) aspect ratio, and original preservation', async () => {
+    // Strict 2 width : 3 height aspect ratio & center-crop calculations
+    expect(calculateAspectRatioDimensions(2000, 3000, MAX_COMPRESSED_DIMENSION)).toEqual({
+      width: 1280,
       height: 1920
     })
-    expect(calculateAspectRatioDimensions(4000, 2000, MAX_COMPRESSED_DIMENSION)).toEqual({
-      width: 1920,
-      height: 960
-    })
-    expect(calculateAspectRatioDimensions(1080, 1440, MAX_COMPRESSED_DIMENSION)).toEqual({
-      width: 1080,
+    expect(calculateAspectRatioDimensions(960, 1440, MAX_COMPRESSED_DIMENSION)).toEqual({
+      width: 960,
       height: 1440
     })
+    // Even if a non-2:3 source dimension is passed, output is strictly 2 width : 3 height (width * 3 === height * 2)
+    const croppedFrom4x3 = computeCenterCrop3x2(1080, 1440)
+    expect(croppedFrom4x3.outWidth * 3).toBe(croppedFrom4x3.outHeight * 2)
+    expect(croppedFrom4x3.outWidth).toBe(960)
+    expect(croppedFrom4x3.outHeight).toBe(1440)
 
     // Original HD Blob must NOT be mutated by compression
     const hdOriginalBytes = new Uint8Array(2048).fill(120)
@@ -417,16 +427,17 @@ describe('XMAS ROLL — End-to-End Domain & Dual Image Storage Verification', ()
     const originalSizeBefore = hdOriginalBlob.size
 
     const compressed = await compressBlobForFirestore(hdOriginalBlob, {
-      sourceWidth: 2400,
-      sourceHeight: 3200,
+      sourceWidth: 1600,
+      sourceHeight: 2400,
       quality: DEFAULT_COMPRESSED_JPEG_QUALITY
     })
 
     expect(hdOriginalBlob.size).toBe(originalSizeBefore)
     expect(compressed.qualityUsed).toBe(0.75)
     expect(compressed.imageFormat).toBe('image/jpeg')
-    expect(compressed.width).toBe(1440)
+    expect(compressed.width).toBe(1280)
     expect(compressed.height).toBe(1920)
+    expect(compressed.width * 3).toBe(compressed.height * 2)
     expect(compressed.compressedBase64).toMatch(/^data:image\/jpeg;base64,/)
   })
 
@@ -547,5 +558,22 @@ describe('XMAS ROLL — End-to-End Domain & Dual Image Storage Verification', ()
     const firestorePhotos = await fetchGuestPhotos(guest.id, session.eventId)
     expect(firestorePhotos.length).toBe(1)
     expect(firestorePhotos[0]!.compressedImage).toMatch(/^data:image\/jpeg;base64,/)
+  })
+
+  it('13. Verifies Firebase jmall-xmas-roll Web App config and Google Sign-In helpers', async () => {
+    expect(firebaseConfig.projectId).toBe('jmall-xmas-roll')
+    expect(firebaseConfig.appId).toBe('1:672029754347:web:d4c3e77c6e32ec32f4cfae')
+    expect(firebaseConfig.authDomain).toBe('jmall-xmas-roll.firebaseapp.com')
+    expect(googleProvider.providerId).toBe('google.com')
+
+    const googleAdmin = await signInAdminWithGoogle()
+    expect(googleAdmin.isAdminVerified).toBe(true)
+    expect(googleAdmin.authProvider).toBe('google')
+
+    const googleGuest = await signInGuestWithGoogle()
+    expect(googleGuest.email).toContain('@')
+    expect(googleGuest.fullName.length).toBeGreaterThanOrEqual(2)
+
+    await signOutAdmin()
   })
 })

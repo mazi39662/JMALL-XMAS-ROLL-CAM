@@ -9,6 +9,7 @@
  */
 
 export const MAX_COMPRESSED_DIMENSION = 1920
+export const PHOTO_ASPECT_RATIO = 2 / 3 // Strict 2 width x 3 height (portrait 3x2) aspect ratio
 export const DEFAULT_COMPRESSED_JPEG_QUALITY = 0.75
 export const MAX_FIRESTORE_PAYLOAD_BYTES = 700 * 1024 // ~700 KiB conservative cap (Firestore hard limit is 1 MiB = 1,048,576 bytes)
 export const FIRESTORE_HARD_LIMIT_BYTES = 1024 * 1024 // 1 MiB
@@ -40,26 +41,26 @@ export interface CompressImageOptions {
 }
 
 /**
- * Calculates resized dimensions that fit within `maxDimension × maxDimension`
- * while preserving the exact aspect ratio and image orientation (portrait/landscape/square).
- * Never upscales images smaller than `maxDimension`.
+ * Calculates resized 2:3 (2 width x 3 height) dimensions that fit within `maxDimension` (max 1280x1920).
+ * Always enforces a strict 2:3 width-to-height ratio (3 height : 2 width) without upscaling smaller frames.
  */
 export function calculateAspectRatioDimensions(
   sourceWidth: number,
   sourceHeight: number,
   maxDimension = MAX_COMPRESSED_DIMENSION
 ): { width: number; height: number } {
-  const validW = Math.max(1, Math.round(sourceWidth || 1080))
-  const validH = Math.max(1, Math.round(sourceHeight || 1440))
+  const validW = Math.max(2, Math.round(sourceWidth || 960))
+  const validH = Math.max(3, Math.round(sourceHeight || 1440))
 
-  if (validW <= maxDimension && validH <= maxDimension) {
-    return { width: validW, height: validH }
-  }
+  // Fit inside source dimensions while enforcing 2 width : 3 height ratio
+  const effectiveH = Math.min(validH, Math.round(validW / PHOTO_ASPECT_RATIO))
+  const cappedH = Math.min(effectiveH, maxDimension)
+  const maxUnit = Math.max(1, Math.floor(maxDimension / 3))
+  const unit = Math.max(1, Math.min(maxUnit, Math.round(cappedH / 3)))
 
-  const scale = Math.min(maxDimension / validW, maxDimension / validH)
   return {
-    width: Math.max(1, Math.round(validW * scale)),
-    height: Math.max(1, Math.round(validH * scale))
+    width: unit * 2,
+    height: unit * 3
   }
 }
 
@@ -254,12 +255,12 @@ export async function compressCanvasForFirestore(
   const maxPayloadBytes = options.maxPayloadBytes ?? MAX_FIRESTORE_PAYLOAD_BYTES
   const allowAdaptive = options.allowAdaptiveRecompression ?? true
 
-  const srcW = effectsCanvas.width || options.sourceWidth || 1080
+  const srcW = effectsCanvas.width || options.sourceWidth || 960
   const srcH = effectsCanvas.height || options.sourceHeight || 1440
 
   const baseDims = calculateAspectRatioDimensions(srcW, srcH, maxDimension)
 
-  // Attempt schedule: starts at 1.0 scale & 0.75 quality, then steps down if needed
+  // Attempt schedule: starts at 1.0 scale & 0.75 quality, then steps down if needed (keeping 2 width : 3 height ratio)
   const attempts: Array<{ scale: number; quality: number }> = allowAdaptive
     ? [
         { scale: 1.0, quality: initialQuality },
@@ -273,8 +274,9 @@ export async function compressCanvasForFirestore(
   let lastEstimatedBytes = 0
 
   for (const attempt of attempts) {
-    const targetWidth = Math.max(1, Math.round(baseDims.width * attempt.scale))
-    const targetHeight = Math.max(1, Math.round(baseDims.height * attempt.scale))
+    const unit = Math.max(1, Math.round((baseDims.height * attempt.scale) / 3))
+    const targetWidth = unit * 2
+    const targetHeight = unit * 3
 
     const compCanvas = document.createElement('canvas')
     compCanvas.width = targetWidth
@@ -382,7 +384,7 @@ export async function compressBlobForFirestore(
   // 2. Fallback for headless/test environments or already-encoded JPEG blobs:
   //    Never mutate `sourceBlob`! Create a new compressed JPEG copy and validate size.
   const { width, height } = calculateAspectRatioDimensions(
-    options.sourceWidth || 1080,
+    options.sourceWidth || 960,
     options.sourceHeight || 1440,
     maxDimension
   )

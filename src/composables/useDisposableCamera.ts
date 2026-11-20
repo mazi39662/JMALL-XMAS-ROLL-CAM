@@ -54,7 +54,7 @@ export function useDisposableCamera() {
       if (canvas) {
         const ctx = canvas.getContext('2d')
         if (ctx) {
-          const w = canvas.width || 720
+          const w = canvas.width || 640
           const h = canvas.height || 960
           // Warm holiday bokeh background
           const grad = ctx.createLinearGradient(0, 0, w, h)
@@ -111,13 +111,13 @@ export function useDisposableCamera() {
 
           // Party banner caption inside scene
           ctx.fillStyle = 'rgba(245, 240, 230, 0.9)'
-          ctx.font = '700 26px "Fraunces", Georgia, serif'
+          ctx.font = '700 24px "Fraunces", Georgia, serif'
           ctx.textAlign = 'center'
           ctx.fillText('JMALL CHRISTMAS PARTY', 0, 170)
-          ctx.font = '400 16px "Space Mono", monospace'
+          ctx.font = '400 15px "Space Mono", monospace'
           ctx.fillStyle = 'rgba(199, 166, 106, 0.9)'
           ctx.fillText(
-            facingMode.value === 'environment' ? 'REAR LENS · 35MM f/2.8' : 'SELFIE LENS · 35MM f/2.8',
+            facingMode.value === 'environment' ? 'REAR LENS · 35MM 3x2' : 'SELFIE LENS · 35MM 3x2',
             0,
             200
           )
@@ -151,8 +151,9 @@ export function useDisposableCamera() {
         audio: false,
         video: {
           facingMode: { ideal: requestedFacing },
-          width: { ideal: 1440 },
-          height: { ideal: 1920 }
+          width: { ideal: 1280 },
+          height: { ideal: 1920 },
+          aspectRatio: { ideal: 2 / 3 }
         }
       }
 
@@ -245,7 +246,7 @@ export function useDisposableCamera() {
 
       if (permissionStatus.value === 'granted' && videoRef.value) {
         const video = videoRef.value
-        const w = video.videoWidth || 1080
+        const w = video.videoWidth || 960
         const h = video.videoHeight || 1440
         const mirror = facingMode.value === 'user'
 
@@ -264,7 +265,7 @@ export function useDisposableCamera() {
         const canvas = fallbackCanvasRef.value
         return await processCameraFrame(
           canvas,
-          canvas.width || 720,
+          canvas.width || 640,
           canvas.height || 960,
           false,
           filmConfig.value,

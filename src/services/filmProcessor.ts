@@ -2,7 +2,8 @@ import type { FilmEffectConfig, FilmFilterPreset, FilmOverlayPreset } from '@/ty
 import {
   compressCanvasForFirestore,
   DEFAULT_COMPRESSED_JPEG_QUALITY,
-  MAX_COMPRESSED_DIMENSION
+  MAX_COMPRESSED_DIMENSION,
+  PHOTO_ASPECT_RATIO
 } from './imageProcessor'
 
 export interface ProcessedFilmFrame {
@@ -859,10 +860,50 @@ export async function reprocessCapturedFrame(
 }
 
 /**
+ * Computes a center-crop rectangle from any camera source (e.g. 4:3, 16:9, or portrait)
+ * so that every captured image is strictly 3 height x 2 width (width : height = 2 : 3).
+ */
+export function computeCenterCrop3x2(
+  srcWidth: number,
+  srcHeight: number
+): {
+  sx: number
+  sy: number
+  sWidth: number
+  sHeight: number
+  outWidth: number
+  outHeight: number
+} {
+  const validW = Math.max(2, Math.round(srcWidth || 960))
+  const validH = Math.max(3, Math.round(srcHeight || 1440))
+  const srcAspect = validW / validH
+
+  let sWidth = validW
+  let sHeight = validH
+  if (srcAspect > PHOTO_ASPECT_RATIO) {
+    // Source is wider than 2:3 -> crop left and right equally
+    sWidth = Math.round(validH * PHOTO_ASPECT_RATIO)
+  } else if (srcAspect < PHOTO_ASPECT_RATIO) {
+    // Source is taller than 2:3 -> crop top and bottom equally
+    sHeight = Math.round(validW / PHOTO_ASPECT_RATIO)
+  }
+
+  const unit = Math.max(1, Math.floor(Math.min(sWidth / 2, sHeight / 3)))
+  const outWidth = unit * 2
+  const outHeight = unit * 3
+
+  const sx = Math.max(0, Math.floor((validW - sWidth) * 0.5))
+  const sy = Math.max(0, Math.floor((validH - sHeight) * 0.5))
+
+  return { sx, sy, sWidth, sHeight, outWidth, outHeight }
+}
+
+/**
  * Captures a frame from a video or image element:
+ * - Center-crops the source to a strict 3 height x 2 width (2:3) aspect ratio
  * - Preserves the full native resolution HD original without downscaling or quality reduction
  * - Applies disposable-camera effects
- * - Generates the resized (max 1920x1920) 75% JPEG compressed version for Firestore
+ * - Generates the resized (max 1280x1920) 75% JPEG compressed version for Firestore
  */
 export async function processCameraFrame(
   source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement,
@@ -873,9 +914,10 @@ export async function processCameraFrame(
   shotNumber: number,
   capturedAtIso = new Date().toISOString()
 ): Promise<ProcessedFilmFrame> {
-  // Preserve full captured HD resolution for Version A (HD Original)
-  const hdWidth = Math.max(1, Math.round(sourceWidth || 1080))
-  const hdHeight = Math.max(1, Math.round(sourceHeight || 1440))
+  // Enforce strict 3 height x 2 width (2:3) aspect ratio on all captured images
+  const crop = computeCenterCrop3x2(sourceWidth || 960, sourceHeight || 1440)
+  const hdWidth = crop.outWidth
+  const hdHeight = crop.outHeight
 
   const origCanvas = document.createElement('canvas')
   origCanvas.width = hdWidth
@@ -890,7 +932,17 @@ export async function processCameraFrame(
     origCtx.translate(hdWidth, 0)
     origCtx.scale(-1, 1)
   }
-  origCtx.drawImage(source, 0, 0, hdWidth, hdHeight)
+  origCtx.drawImage(
+    source,
+    crop.sx,
+    crop.sy,
+    crop.sWidth,
+    crop.sHeight,
+    0,
+    0,
+    hdWidth,
+    hdHeight
+  )
   origCtx.restore()
 
   const originalPreviewDataUrl = origCanvas.toDataURL('image/jpeg', 1.0)

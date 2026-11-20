@@ -1557,7 +1557,7 @@ function formatDateTime(iso: string): string {
 
 .photo-thumb-box {
   width: 100%;
-  aspect-ratio: 3 / 4;
+  aspect-ratio: 2 / 3;
   background: #101211;
   border-radius: 8px;
   overflow: hidden;
@@ -1987,7 +1987,9 @@ function formatDateTime(iso: string): string {
 
 .modal-img-stage {
   width: 100%;
-  max-height: 60vh;
+  max-width: min(100%, calc(60vh * 2 / 3));
+  aspect-ratio: 2 / 3;
+  margin: 0 auto;
   background: #101211;
   border-radius: 12px;
   overflow: hidden;
@@ -1996,9 +1998,10 @@ function formatDateTime(iso: string): string {
   justify-content: center;
 
   img {
-    max-width: 100%;
-    max-height: 60vh;
-    object-fit: contain;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
   }
 }
 
@@ -2039,8 +2042,8 @@ function formatDateTime(iso: string): string {
   }
 
   .mini-thumb {
-    width: 64px;
-    height: 84px;
+    width: 60px;
+    height: 90px;
     object-fit: cover;
     border-radius: 6px;
     cursor: pointer;

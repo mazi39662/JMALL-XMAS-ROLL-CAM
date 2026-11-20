@@ -37,6 +37,8 @@ const recoveryForm = reactive({
 
 const errorMessage = ref('')
 const isSubmitting = ref(false)
+const isGoogleLoading = ref(false)
+const googleLinkedEmail = ref('')
 
 const departmentSuggestions = [
   'Operations',
@@ -62,6 +64,41 @@ watch(
     errorMessage.value = ''
   }
 )
+
+async function handleGoogleGuestSignIn() {
+  errorMessage.value = ''
+  isGoogleLoading.value = true
+  try {
+    const profile = await sessionStore.authenticateGuestWithGoogle()
+    googleLinkedEmail.value = profile.email
+
+    // Try recovering an existing camera roll if one was already registered under this Google account
+    try {
+      await sessionStore.recoverExistingGuest(profile.fullName, profile.email)
+      router.push('/camera')
+      return
+    } catch {
+      // No existing registration found yet -> populate the form for quick registration
+    }
+
+    if (mode.value === 'recover') {
+      recoveryForm.fullName = profile.fullName
+      recoveryForm.verificationInput = profile.email
+      mode.value = 'register'
+    }
+
+    if (!form.fullName) {
+      form.fullName = profile.fullName
+    }
+    if (profile.email) {
+      form.email = profile.email
+    }
+  } catch (err: any) {
+    errorMessage.value = err?.message || 'Google Sign-In failed. Please try again.'
+  } finally {
+    isGoogleLoading.value = false
+  }
+}
 
 async function handleRegistrationSubmit() {
   errorMessage.value = ''
@@ -170,6 +207,54 @@ async function handleRecoverySubmit() {
             >
               Tap here to open your existing camera &rarr;
             </button>
+          </div>
+        </div>
+
+        <!-- GOOGLE QUICK SIGN-IN -->
+        <div class="google-auth-section">
+          <button
+            type="button"
+            class="btn google-guest-btn"
+            :disabled="isSubmitting || isGoogleLoading"
+            data-testid="google-guest-signin-btn"
+            @click="handleGoogleGuestSignIn"
+          >
+            <svg class="google-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="#4285F4"
+                d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
+              />
+              <path
+                fill="#EA4335"
+                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"
+              />
+            </svg>
+            <span>
+              {{
+                isGoogleLoading
+                  ? 'Connecting with Google...'
+                  : mode === 'recover'
+                    ? 'Open Camera with Google'
+                    : 'Continue with Google'
+              }}
+            </span>
+          </button>
+
+          <div v-if="googleLinkedEmail" class="google-linked-pill font-mono">
+            <CheckCircle2 :size="14" />
+            <span>Signed in as {{ googleLinkedEmail }}</span>
+          </div>
+
+          <div class="or-divider font-mono">
+            <span>OR ENTER DETAILS BELOW</span>
           </div>
         </div>
 
@@ -485,6 +570,71 @@ async function handleRecoverySubmit() {
   border-radius: var(--radius-md);
   font-size: 0.84rem;
   margin-bottom: 1rem;
+}
+
+.google-auth-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.google-guest-btn {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  background: #ffffff;
+  color: #1f1f1f;
+  border: 1.5px solid var(--charcoal-border);
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 0.92rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  transition: all 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: #f8f9fa;
+    border-color: var(--forest-green);
+    transform: translateY(-1px);
+  }
+
+  .google-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+}
+
+.google-linked-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: var(--forest-green);
+  background: var(--forest-green-subtle);
+  border: 1px solid rgba(24, 61, 50, 0.25);
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius-sm);
+}
+
+.or-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.68rem;
+  color: var(--charcoal-muted);
+  letter-spacing: 0.05em;
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--charcoal-border);
+  }
 }
 
 .form-row-2 {

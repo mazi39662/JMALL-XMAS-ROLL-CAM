@@ -21,8 +21,10 @@ import {
   validateFirestoreDocumentSize
 } from './imageProcessor'
 import {
+  getAllLocalFallbackPhotoRecords,
   getOriginalPhoto,
   getPendingUploads,
+  saveLocalFallbackPhotoRecord,
   saveOriginalPhoto,
   updateUploadStatus
 } from './indexedDbStorage'
@@ -45,9 +47,19 @@ export const ACTIVE_GUEST_SESSION_KEY = 'xmas_roll_active_session_v1'
 // Concurrency guard to prevent concurrent shot consumption in the same client/runtime
 const activeSessionLocks = new Set<string>()
 
-// In-memory store for simulated Firestore photo documents when running without Firebase credentials.
+// In-memory cache + IndexedDB store for simulated Firestore photo documents when running without Firebase credentials.
 // IMPORTANT: Never store image binaries or Base64 images in localStorage!
 const localFirestorePhotosStore = new Map<string, PhotoRecord>()
+
+async function ensureLocalFallbackPhotosHydrated(): Promise<PhotoRecord[]> {
+  const fromIdb = await getAllLocalFallbackPhotoRecords()
+  for (const item of fromIdb) {
+    if (!localFirestorePhotosStore.has(item.id)) {
+      localFirestorePhotosStore.set(item.id, item)
+    }
+  }
+  return Array.from(localFirestorePhotosStore.values())
+}
 
 export interface PersistedClientSession {
   guestId: string
@@ -109,7 +121,7 @@ function normalizeFirestorePhotoRecord(raw: Record<string, any>, docId?: string)
     facingMode: (raw.facingMode || 'environment') as 'user' | 'environment',
     preset: (raw.preset || 'kodak-gold') as FilmEffectConfig['warmthPreset'],
     ...(raw.overlay ? { overlay: raw.overlay as FilmOverlayPreset } : {}),
-    width: Number(raw.width || 1080),
+    width: Number(raw.width || 960),
     height: Number(raw.height || 1440),
     sizeBytes: Number(raw.sizeBytes || 0)
   }
@@ -481,11 +493,16 @@ export async function recoverGuestSession(
   }
 
   const lockId = `${eventId}_${normalizedKey}`
+  const cleanVerify = verificationInput.trim().toLowerCase()
+  const emailLockId = cleanVerify.includes('@') ? `${eventId}_email_${cleanVerify}` : ''
   let guestId = ''
   let sessionId = ''
 
   if (isFirebaseConfigured && db) {
-    const lockSnap = await getDoc(doc(db, 'guestLocks', lockId))
+    let lockSnap = await getDoc(doc(db, 'guestLocks', lockId))
+    if (!lockSnap.exists() && emailLockId) {
+      lockSnap = await getDoc(doc(db, 'guestLocks', emailLockId))
+    }
     if (!lockSnap.exists()) {
       throw new Error('No registration found under that name.')
     }
@@ -494,7 +511,7 @@ export async function recoverGuestSession(
     sessionId = lockData.sessionId
   } else {
     const local = loadLocalDb()
-    const lockData = local.guestLocks[lockId]
+    const lockData = local.guestLocks[lockId] || (emailLockId ? local.guestLocks[emailLockId] : undefined)
     if (!lockData) {
       throw new Error('No registration found under that name.')
     }
@@ -509,7 +526,6 @@ export async function recoverGuestSession(
     throw new Error('Could not load camera session details.')
   }
 
-  const cleanVerify = verificationInput.trim().toLowerCase()
   if (guest.email || guest.contactNumber) {
     const emailMatch = guest.email && guest.email.toLowerCase() === cleanVerify
     const phoneMatch =
@@ -945,8 +961,9 @@ export async function submitCapturedPhoto(
         usedShots: newUsedShots
       }
 
-      // Store photo record in memory store (never in localStorage!)
+      // Store photo record in memory + IndexedDB fallback store (never in localStorage!)
       localFirestorePhotosStore.set(deterministicPhotoId, photoRecord)
+      await saveLocalFallbackPhotoRecord(photoRecord)
       local.cameraSessions[session.id] = updatedSession
       local.guests[guest.id] = updatedGuest
       saveLocalDb(local)
@@ -1055,7 +1072,7 @@ export async function retryPendingPhotoUpload(
     facingMode: localRecord.facingMode ?? 'environment',
     preset: localRecord.preset ?? 'kodak-gold',
     overlay: localRecord.overlay,
-    width: localRecord.width ?? 1080,
+    width: localRecord.width ?? 960,
     height: localRecord.height ?? 1440,
     onProgress
   })
@@ -1081,7 +1098,8 @@ export async function fetchGuestPhotos(
     return items.sort((a, b) => a.shotNumber - b.shotNumber)
   }
 
-  return Array.from(localFirestorePhotosStore.values())
+  const allLocal = await ensureLocalFallbackPhotosHydrated()
+  return allLocal
     .filter((p) => p.eventId === eventId && p.guestId === guestId)
     .sort((a, b) => a.shotNumber - b.shotNumber)
 }
@@ -1104,7 +1122,8 @@ export async function fetchPublicPartyPhotos(
       .filter((p) => isPhotoVisibleStatus(p.status))
   }
 
-  return Array.from(localFirestorePhotosStore.values())
+  const allLocal = await ensureLocalFallbackPhotosHydrated()
+  return allLocal
     .filter((p) => p.eventId === eventId && isPhotoVisibleStatus(p.status))
     .sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))
 }
@@ -1137,7 +1156,8 @@ export async function fetchAllPhotosForAdmin(eventId = DEFAULT_EVENT_ID): Promis
     return snap.docs.map((d) => normalizeFirestorePhotoRecord(d.data(), d.id))
   }
 
-  return Array.from(localFirestorePhotosStore.values())
+  const allLocal = await ensureLocalFallbackPhotosHydrated()
+  return allLocal
     .filter((p) => p.eventId === eventId)
     .sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))
 }
@@ -1160,6 +1180,7 @@ export async function updatePhotoModerationStatus(
     return normalizeFirestorePhotoRecord(updated.data(), updated.id)
   }
 
+  await ensureLocalFallbackPhotosHydrated()
   const existing = localFirestorePhotosStore.get(photoId)
   if (!existing) {
     throw new Error('Photo not found.')
@@ -1169,5 +1190,6 @@ export async function updatePhotoModerationStatus(
     status
   }
   localFirestorePhotosStore.set(photoId, updated)
+  await saveLocalFallbackPhotoRecord(updated)
   return { ...updated }
 }

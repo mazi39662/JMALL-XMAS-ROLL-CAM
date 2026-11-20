@@ -1,20 +1,207 @@
 rules_version = '2';
 
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: admins
+// Document ID: {adminUid} (Firebase Auth UID)
+// Fields:
+//   - role: string (required, must be 'admin') - Admin role indicator
+//   - email: string (optional, max 160 chars) - Admin email address
+//   - updatedAt: string (optional, max 64 chars) - ISO 8601 timestamp
+//
+// Collection: events
+// Document ID: {eventId} (e.g. 'xmas-party-2026')
+// Fields:
+//   - id: string (required, 1..100 chars, immutable) - Event identifier
+//   - name: string (required, 1..160 chars) - Event display title
+//   - tagline: string (required, 0..240 chars) - Event tagline
+//   - date: string (required, 1..64 chars) - Event date/time string
+//   - venue: string (required, 1..200 chars) - Event venue location
+//   - description: string (required, 0..1000 chars) - Event description
+//   - registrationOpen: bool (required) - Whether guest registration is open
+//   - cameraEnabled: bool (required) - Whether disposable camera is enabled
+//   - photoSubmissionOpen: bool (required) - Whether photo uploads are accepted
+//   - maxShotsPerGuest: int (required, must be 10) - Shots per guest roll
+//   - createdAt: string (required, 1..64 chars, immutable) - ISO 8601 creation time
+//   - updatedAt: string (required, 1..64 chars) - ISO 8601 last update time
+//
+// Collection: guests
+// Document ID: {guestId} (e.g. 'guest_<12chars>')
+// Fields:
+//   - id: string (required, matches guestId, immutable)
+//   - fullName: string (required, 2..100 chars, immutable for guests)
+//   - normalizedKey: string (required, 1..120 chars, immutable for guests)
+//   - contactNumber: string (required, 0..40 chars, immutable for guests)
+//   - email: string (required, 0..160 chars, immutable for guests)
+//   - department: string (required, 1..100 chars, immutable for guests)
+//   - attendance: string (required, 'attending' | 'not_attending', immutable for guests)
+//   - mediaAgreement: bool (required, must be true, immutable)
+//   - eventId: string (required, 1..100 chars, immutable)
+//   - cameraSessionId: string (required, 1..100 chars, immutable)
+//   - totalShots: int (required, must be 10, immutable)
+//   - usedShots: int (required, 0..10, atomic +1 increment only)
+//   - createdAt: string (required, 1..64 chars, immutable)
+//   - authUid: string (optional, 1..128 chars) - Optional Firebase Auth UID
+//
+// Collection: guestLocks
+// Document ID: {lockId} (deterministic '{eventId}_{normalizedKey|email|phone}')
+// Fields:
+//   - guestId: string (required, 1..100 chars, immutable)
+//   - sessionId: string (required, 1..100 chars, immutable)
+//   - createdAt: string (required, 1..64 chars, immutable)
+//
+// Collection: cameraSessions
+// Document ID: {sessionId} (e.g. 'cam_<12chars>')
+// Fields:
+//   - id: string (required, matches sessionId, immutable)
+//   - guestId: string (required, 1..100 chars, immutable)
+//   - guestName: string (required, 2..100 chars, immutable)
+//   - department: string (required, 1..100 chars, immutable)
+//   - eventId: string (required, 1..100 chars, immutable)
+//   - sessionSecret: string (required, 1..100 chars, immutable)
+//   - totalShots: int (required, must be 10, immutable)
+//   - usedShots: int (required, 0..10, atomic +1 increment only)
+//   - createdAt: string (required, 1..64 chars, immutable)
+//   - lastCaptureAt: string (optional, 1..64 chars)
+//
+// Collection: photos
+// Document ID: {photoId} (deterministic '{sessionId}_shot_{shotNumber}')
+// Fields:
+//   - id: string (required, matches photoId, immutable)
+//   - eventId: string (required, 1..100 chars, immutable)
+//   - guestId: string (required, 1..100 chars, immutable)
+//   - guestName: string (required, 2..100 chars, immutable)
+//   - department: string (required, 1..100 chars, immutable)
+//   - sessionId: string (required, 1..100 chars, immutable)
+//   - shotNumber: int (required, 1..10, immutable)
+//   - filename: string (required, 1..180 chars, immutable)
+//   - compressedImage: string (required, Base64 JPEG data URL <= 730,000 chars, immutable)
+//   - imageFormat: string (required, 'image/jpeg', immutable)
+//   - width: int (required, 1..1280, width * 3 == height * 2, immutable)
+//   - height: int (required, 1..1920, immutable)
+//   - sizeBytes: int (required, 1..716800, immutable)
+//   - capturedAt: timestamp (required, immutable)
+//   - capturedAtIso: string (optional, 1..64 chars, immutable)
+//   - uploadedAt: timestamp (required, immutable)
+//   - uploadedAtIso: string (optional, 1..64 chars, immutable)
+//   - status: string (required, 'active' | 'visible' | 'hidden')
+//   - flashUsed: bool (required, immutable)
+//   - facingMode: string (required, 'user' | 'environment', immutable)
+//   - preset: string (required, 1..40 chars, immutable)
+//   - overlay: string (optional, 1..40 chars, immutable)
+//   - storageProvider: string (optional, 1..40 chars, immutable)
+//   - isPublicStorage: bool (optional, immutable)
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper: Check if the authenticated user is a verified Admin
-    // Checks either custom claim `admin == true` OR presence in `admins/{uid}` collection
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource (for user-owned documents)
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user is owner based on document's uid field
+    function isDocOwner() {
+      return isAuthenticated() && ('uid' in resource.data) && request.auth.uid == resource.data.uid;
+    }
+
+    // Verify UID hasn't been tampered with on create
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    // Ensure uid field is not modified on update
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    // Validate required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only the allowed fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate string length
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // Validate optional string (if present, must be string and within length)
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    // Validate email format (or empty string when optional in form)
+    function isValidOptionalEmail(email) {
+      return email is string &&
+        email.size() <= 160 &&
+        (email.size() == 0 || email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"));
+    }
+
+    // Validate ISO 8601 date string format
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.size() >= 10 &&
+        dateStr.size() <= 64 &&
+        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}.*$");
+    }
+
+    // Validate that immutable fields have not been modified on update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Check if the authenticated user is a verified Admin
+    // Checks custom claim `admin == true`, presence in `admins/{uid}` with role == 'admin',
+    // or verified organizer email allowlist.
     function isAdmin() {
-      return request.auth != null && (
+      return isAuthenticated() && (
         request.auth.token.admin == true ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin') ||
+        ('email' in request.auth.token &&
+         request.auth.token.email in ['mazi39662@gmail.com', 'admin@jmall.com', 'organizer@xmasroll.local'])
       );
     }
 
-    // Helper: Validate event state for registration / camera / photo submission
-    function getEvent(eventId) {
-      return get(/databases/$(database)/documents/events/$(eventId)).data;
+    // Helper: Check if event registration is open (defaults to true if event doc is not yet initialized)
+    function isEventRegistrationOpen(eventId) {
+      return !exists(/databases/$(database)/documents/events/$(eventId)) ||
+        get(/databases/$(database)/documents/events/$(eventId)).data.registrationOpen == true;
+    }
+
+    // Helper: Check if camera and photo submission are open (defaults to true if event doc is not yet initialized)
+    function isEventPhotoSubmissionOpen(eventId) {
+      return !exists(/databases/$(database)/documents/events/$(eventId)) || (
+        get(/databases/$(database)/documents/events/$(eventId)).data.cameraEnabled == true &&
+        get(/databases/$(database)/documents/events/$(eventId)).data.photoSubmissionOpen == true
+      );
     }
 
     // Helper: Expected deterministic photo document path for a given session and shot number
@@ -22,167 +209,299 @@ service cloud.firestore {
       return /databases/$(database)/documents/photos/$(sessionId + '_shot_' + string(shotNumber));
     }
 
-    // =========================================================================
-    // 1. ADMINS COLLECTION
-    // =========================================================================
-    match /admins/{adminUid} {
-      allow read: if request.auth != null && request.auth.uid == adminUid;
-      allow write: if false; // Managed via Firebase Console only
+    // ===============================================================
+    // Domain Validators (Used in both create and update)
+    // ===============================================================
+
+    function isValidAdminDoc(data) {
+      return hasOnlyAllowedFields(['role', 'email', 'updatedAt']) &&
+        hasRequiredFields(['role']) &&
+        data.role == 'admin' &&
+        isValidOptionalString('email', 0, 160) &&
+        isValidOptionalString('updatedAt', 0, 64);
     }
 
-    // =========================================================================
+    function isValidEvent(data, eventId) {
+      return hasOnlyAllowedFields([
+          'id', 'name', 'tagline', 'date', 'venue', 'description',
+          'registrationOpen', 'cameraEnabled', 'photoSubmissionOpen',
+          'maxShotsPerGuest', 'createdAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields([
+          'id', 'name', 'tagline', 'date', 'venue', 'description',
+          'registrationOpen', 'cameraEnabled', 'photoSubmissionOpen',
+          'maxShotsPerGuest', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == eventId &&
+        validStringLength('id', 1, 100) &&
+        validStringLength('name', 1, 160) &&
+        validStringLength('tagline', 0, 240) &&
+        validStringLength('date', 1, 64) &&
+        validStringLength('venue', 1, 200) &&
+        validStringLength('description', 0, 1000) &&
+        data.registrationOpen is bool &&
+        data.cameraEnabled is bool &&
+        data.photoSubmissionOpen is bool &&
+        data.maxShotsPerGuest is int &&
+        data.maxShotsPerGuest == 10 &&
+        validStringLength('createdAt', 1, 64) &&
+        validStringLength('updatedAt', 1, 64);
+    }
+
+    function isValidGuest(data, guestId) {
+      return hasOnlyAllowedFields([
+          'id', 'fullName', 'normalizedKey', 'contactNumber', 'email',
+          'department', 'attendance', 'mediaAgreement', 'eventId',
+          'cameraSessionId', 'totalShots', 'usedShots', 'createdAt', 'authUid'
+        ]) &&
+        hasRequiredFields([
+          'id', 'fullName', 'normalizedKey', 'contactNumber', 'email',
+          'department', 'attendance', 'mediaAgreement', 'eventId',
+          'cameraSessionId', 'totalShots', 'usedShots', 'createdAt'
+        ]) &&
+        data.id == guestId &&
+        validStringLength('id', 1, 100) &&
+        validStringLength('fullName', 2, 100) &&
+        validStringLength('normalizedKey', 1, 120) &&
+        validStringLength('contactNumber', 0, 40) &&
+        isValidOptionalEmail(data.email) &&
+        validStringLength('department', 1, 100) &&
+        data.attendance in ['attending', 'not_attending'] &&
+        data.mediaAgreement == true &&
+        validStringLength('eventId', 1, 100) &&
+        validStringLength('cameraSessionId', 1, 100) &&
+        data.totalShots is int &&
+        data.totalShots == 10 &&
+        data.usedShots is int &&
+        data.usedShots >= 0 &&
+        data.usedShots <= 10 &&
+        isValidDateString(data.createdAt) &&
+        isValidOptionalString('authUid', 1, 128);
+    }
+
+    function isValidGuestLock(data) {
+      return hasOnlyAllowedFields(['guestId', 'sessionId', 'createdAt']) &&
+        hasRequiredFields(['guestId', 'sessionId', 'createdAt']) &&
+        validStringLength('guestId', 1, 100) &&
+        validStringLength('sessionId', 1, 100) &&
+        isValidDateString(data.createdAt);
+    }
+
+    function isValidCameraSession(data, sessionId) {
+      return hasOnlyAllowedFields([
+          'id', 'guestId', 'guestName', 'department', 'eventId',
+          'sessionSecret', 'totalShots', 'usedShots', 'createdAt', 'lastCaptureAt'
+        ]) &&
+        hasRequiredFields([
+          'id', 'guestId', 'guestName', 'department', 'eventId',
+          'sessionSecret', 'totalShots', 'usedShots', 'createdAt'
+        ]) &&
+        data.id == sessionId &&
+        validStringLength('id', 1, 100) &&
+        validStringLength('guestId', 1, 100) &&
+        validStringLength('guestName', 2, 100) &&
+        validStringLength('department', 1, 100) &&
+        validStringLength('eventId', 1, 100) &&
+        validStringLength('sessionSecret', 1, 100) &&
+        data.totalShots is int &&
+        data.totalShots == 10 &&
+        data.usedShots is int &&
+        data.usedShots >= 0 &&
+        data.usedShots <= 10 &&
+        isValidDateString(data.createdAt) &&
+        isValidOptionalString('lastCaptureAt', 1, 64);
+    }
+
+    function isValidPhoto(data, photoId) {
+      return hasOnlyAllowedFields([
+          'id', 'eventId', 'guestId', 'guestName', 'department',
+          'sessionId', 'shotNumber', 'filename', 'compressedImage',
+          'imageFormat', 'width', 'height', 'sizeBytes',
+          'capturedAt', 'capturedAtIso', 'uploadedAt', 'uploadedAtIso',
+          'status', 'flashUsed', 'facingMode', 'preset', 'overlay',
+          'storageProvider', 'isPublicStorage'
+        ]) &&
+        hasRequiredFields([
+          'id', 'eventId', 'guestId', 'guestName', 'department',
+          'sessionId', 'shotNumber', 'filename', 'compressedImage',
+          'imageFormat', 'width', 'height', 'sizeBytes',
+          'capturedAt', 'uploadedAt', 'status', 'flashUsed',
+          'facingMode', 'preset'
+        ]) &&
+        data.id == photoId &&
+        photoId == (data.sessionId + '_shot_' + string(data.shotNumber)) &&
+        validStringLength('id', 1, 140) &&
+        validStringLength('eventId', 1, 100) &&
+        validStringLength('guestId', 1, 100) &&
+        validStringLength('guestName', 2, 100) &&
+        validStringLength('department', 1, 100) &&
+        validStringLength('sessionId', 1, 100) &&
+        data.shotNumber is int &&
+        data.shotNumber >= 1 &&
+        data.shotNumber <= 10 &&
+        validStringLength('filename', 1, 180) &&
+        data.compressedImage is string &&
+        data.compressedImage.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$') &&
+        data.compressedImage.size() <= 730000 &&
+        data.imageFormat == 'image/jpeg' &&
+        data.width is int &&
+        data.width > 0 &&
+        data.width <= 1280 &&
+        data.height is int &&
+        data.height > 0 &&
+        data.height <= 1920 &&
+        data.width * 3 == data.height * 2 &&
+        data.sizeBytes is int &&
+        data.sizeBytes > 0 &&
+        data.sizeBytes <= 716800 &&
+        data.capturedAt is timestamp &&
+        isValidOptionalString('capturedAtIso', 1, 64) &&
+        data.uploadedAt is timestamp &&
+        isValidOptionalString('uploadedAtIso', 1, 64) &&
+        data.status in ['active', 'visible', 'hidden'] &&
+        data.flashUsed is bool &&
+        data.facingMode in ['user', 'environment'] &&
+        validStringLength('preset', 1, 40) &&
+        isValidOptionalString('overlay', 1, 40) &&
+        isValidOptionalString('storageProvider', 1, 40) &&
+        (!('isPublicStorage' in data) || data.isPublicStorage is bool) &&
+        !('originalBlob' in data) &&
+        !('imageBlob' in data);
+    }
+
+    // ===============================================================
+    // 1. ADMINS COLLECTION
+    // ===============================================================
+    match /admins/{adminUid} {
+      allow read: if isOwner(adminUid) || isAdmin();
+      allow create, update: if isOwner(adminUid) && isAdmin() && isValidAdminDoc(request.resource.data);
+      allow delete: if false;
+    }
+
+    // ===============================================================
     // 2. EVENTS COLLECTION
-    // =========================================================================
+    // ===============================================================
     match /events/{eventId} {
       // Anyone can read basic event details (name, date, status flags)
       allow read: if true;
-      // Only authenticated admins can create or update event settings
-      allow create, update, delete: if isAdmin();
+
+      // Initial default event creation or admin creation
+      allow create: if isValidEvent(request.resource.data, eventId) && (
+        isAdmin() || (
+          !exists(/databases/$(database)/documents/events/$(eventId)) &&
+          request.resource.data.registrationOpen == true &&
+          request.resource.data.cameraEnabled == true &&
+          request.resource.data.photoSubmissionOpen == true
+        )
+      );
+
+      // Only verified admins can update or delete event settings
+      allow update: if isAdmin() &&
+        isValidEvent(request.resource.data, eventId) &&
+        areImmutableFieldsUnchanged(['id', 'createdAt']);
+
+      allow delete: if isAdmin();
     }
 
-    // =========================================================================
+    // ===============================================================
     // 3. GUESTS COLLECTION
     //    Guests can register when registrationOpen == true, and read their own doc
-    //    by direct ID lookup (get), NOT list/query other guests' private registration details.
-    // =========================================================================
+    //    by unguessable capability ID lookup (get), NOT list/query other guests' PII.
+    // ===============================================================
     match /guests/{guestId} {
-      // Guests cannot list or query other guests' private registration records
       allow get: if true;
       allow list: if isAdmin();
 
-      // Create registration:
-      // - Event registration must be open
-      // - Initial totalShots must be exactly 10, usedShots must be 0
-      // - Media agreement must be accepted
-      allow create: if getEvent(request.resource.data.eventId).registrationOpen == true
-                    && request.resource.data.fullName is string
-                    && request.resource.data.fullName.size() >= 2
-                    && request.resource.data.fullName.size() <= 100
-                    && request.resource.data.totalShots == 10
-                    && request.resource.data.usedShots == 0
-                    && request.resource.data.mediaAgreement == true;
+      allow create: if isEventRegistrationOpen(request.resource.data.eventId) &&
+        isValidGuest(request.resource.data, guestId) &&
+        request.resource.data.usedShots == 0;
 
-      // Update guest doc:
-      // - Guests CANNOT arbitrarily modify their own shot counter or identity fields
-      // - Guests can ONLY increment usedShots by +1 up to 10 as part of an atomic transaction
-      //   that simultaneously creates the deterministic photo document for that exact shot!
-      allow update: if isAdmin() || (
-        request.resource.data.fullName == resource.data.fullName &&
-        request.resource.data.eventId == resource.data.eventId &&
-        request.resource.data.cameraSessionId == resource.data.cameraSessionId &&
-        request.resource.data.contactNumber == resource.data.contactNumber &&
-        request.resource.data.email == resource.data.email &&
-        request.resource.data.totalShots == 10 &&
-        request.resource.data.usedShots == resource.data.usedShots + 1 &&
-        request.resource.data.usedShots <= 10 &&
-        !exists(deterministicPhotoPath(resource.data.cameraSessionId, request.resource.data.usedShots)) &&
-        existsAfter(deterministicPhotoPath(resource.data.cameraSessionId, request.resource.data.usedShots))
+      // Guests can ONLY increment usedShots by +1 up to 10 in an atomic transaction
+      // that simultaneously creates the deterministic photo document for that exact shot.
+      allow update: if isValidGuest(request.resource.data, guestId) && (
+        isAdmin() || (
+          areImmutableFieldsUnchanged([
+            'id', 'fullName', 'normalizedKey', 'contactNumber', 'email',
+            'department', 'attendance', 'mediaAgreement', 'eventId',
+            'cameraSessionId', 'totalShots', 'createdAt', 'authUid'
+          ]) &&
+          request.resource.data.usedShots == resource.data.usedShots + 1 &&
+          request.resource.data.usedShots <= 10 &&
+          !exists(deterministicPhotoPath(resource.data.cameraSessionId, request.resource.data.usedShots)) &&
+          existsAfter(deterministicPhotoPath(resource.data.cameraSessionId, request.resource.data.usedShots))
+        )
       );
 
       allow delete: if isAdmin();
     }
 
-    // =========================================================================
+    // ===============================================================
     // 4. DUPLICATE REGISTRATION LOCKS
     //    Deterministic document ID: `{eventId}_{normalizedKey}`
-    //    Prevents duplicate registrations for the same guest name / email / phone.
-    // =========================================================================
+    // ===============================================================
     match /guestLocks/{lockId} {
       allow get: if true;
       allow list: if isAdmin();
-      allow create: if !exists(/databases/$(database)/documents/guestLocks/$(lockId));
-      allow update, delete: if isAdmin();
+      allow create: if !exists(/databases/$(database)/documents/guestLocks/$(lockId)) &&
+        isValidGuestLock(request.resource.data);
+      allow update: if isAdmin() && isValidGuestLock(request.resource.data);
+      allow delete: if isAdmin();
     }
 
-    // =========================================================================
+    // ===============================================================
     // 5. CAMERA SESSIONS COLLECTION
     //    Enforces strict 10-shot cap server-side via atomic transaction.
-    // =========================================================================
+    // ===============================================================
     match /cameraSessions/{sessionId} {
       allow get: if true;
       allow list: if isAdmin();
 
-      allow create: if request.resource.data.totalShots == 10
-                    && request.resource.data.usedShots == 0
-                    && request.resource.data.guestId is string
-                    && request.resource.data.eventId is string;
+      allow create: if isValidCameraSession(request.resource.data, sessionId) &&
+        request.resource.data.usedShots == 0;
 
-      // Atomic shot increment:
-      // - Only allows incrementing `usedShots` by +1 in lockstep with creating the photo doc
-      // - Never exceeds `totalShots` (10)
-      // - Never allows decrementing or resetting `usedShots`
-      // - Event must have cameraEnabled == true and photoSubmissionOpen == true
-      allow update: if isAdmin() || (
-        getEvent(resource.data.eventId).cameraEnabled == true &&
-        getEvent(resource.data.eventId).photoSubmissionOpen == true &&
-        request.resource.data.guestId == resource.data.guestId &&
-        request.resource.data.eventId == resource.data.eventId &&
-        request.resource.data.totalShots == 10 &&
-        request.resource.data.usedShots == resource.data.usedShots + 1 &&
-        request.resource.data.usedShots <= 10 &&
-        !exists(deterministicPhotoPath(sessionId, request.resource.data.usedShots)) &&
-        existsAfter(deterministicPhotoPath(sessionId, request.resource.data.usedShots))
+      allow update: if isValidCameraSession(request.resource.data, sessionId) && (
+        isAdmin() || (
+          isEventPhotoSubmissionOpen(resource.data.eventId) &&
+          areImmutableFieldsUnchanged([
+            'id', 'guestId', 'guestName', 'department', 'eventId',
+            'sessionSecret', 'totalShots', 'createdAt'
+          ]) &&
+          request.resource.data.usedShots == resource.data.usedShots + 1 &&
+          request.resource.data.usedShots <= 10 &&
+          !exists(deterministicPhotoPath(sessionId, request.resource.data.usedShots)) &&
+          existsAfter(deterministicPhotoPath(sessionId, request.resource.data.usedShots))
+        )
       );
 
       allow delete: if isAdmin();
     }
 
-    // =========================================================================
+    // ===============================================================
     // 6. PHOTOS COLLECTION (Compressed Base64 JPEG Images Only)
     //    Deterministic photo ID: `{sessionId}_shot_{shotNumber}`
-    //    Each photo is stored in its own document (never all 10 in one guest doc).
-    //    Validates required fields, Base64 JPEG format, dimensions <= 1920x1920,
-    //    and conservative ~700 KiB payload limit (well below Firestore's 1 MiB cap).
-    // =========================================================================
+    // ===============================================================
     match /photos/{photoId} {
-      // Only authorized admins can access the complete (including hidden/moderated) gallery;
-      // guests can read active/visible photos.
-      allow read: if isAdmin() || resource.data.status in ['active', 'visible'];
+      // Party photos contain no PII (only guest display name, department, and compressed image)
+      // and are queried by eventId/guestId for the guest roll and party gallery.
+      allow read: if true;
 
-      // Create compressed photo document:
-      // - Deterministic ID `{sessionId}_shot_{shotNumber}` must not already exist
-      // - Must be committed atomically with cameraSessions/{sessionId} shot increment
-      // - shotNumber must be an integer between 1 and 10
-      // - compressedImage must be a Base64 JPEG data URL bounded within ~700 KiB
-      // - Never allows storing raw HD original blobs in Firestore
-      allow create: if !exists(/databases/$(database)/documents/photos/$(photoId))
-                    && getEvent(request.resource.data.eventId).cameraEnabled == true
-                    && getEvent(request.resource.data.eventId).photoSubmissionOpen == true
-                    && request.resource.data.id == photoId
-                    && request.resource.data.eventId is string
-                    && request.resource.data.guestId is string
-                    && request.resource.data.sessionId is string
-                    && photoId == (request.resource.data.sessionId + '_shot_' + string(request.resource.data.shotNumber))
-                    && request.resource.data.shotNumber is int
-                    && request.resource.data.shotNumber >= 1
-                    && request.resource.data.shotNumber <= 10
-                    && getAfter(/databases/$(database)/documents/cameraSessions/$(request.resource.data.sessionId)).data.usedShots == request.resource.data.shotNumber
-                    && request.resource.data.compressedImage is string
-                    && request.resource.data.compressedImage.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$')
-                    && request.resource.data.compressedImage.size() <= 730000
-                    && request.resource.data.imageFormat == 'image/jpeg'
-                    && request.resource.data.width is int
-                    && request.resource.data.width > 0
-                    && request.resource.data.width <= 1920
-                    && request.resource.data.height is int
-                    && request.resource.data.height > 0
-                    && request.resource.data.height <= 1920
-                    && request.resource.data.sizeBytes is int
-                    && request.resource.data.sizeBytes > 0
-                    && request.resource.data.sizeBytes <= 716800
-                    && request.resource.data.capturedAt is timestamp
-                    && request.resource.data.uploadedAt is timestamp
-                    && request.resource.data.status in ['active', 'visible']
-                    && !('originalBlob' in request.resource.data)
-                    && !('imageBlob' in request.resource.data);
+      allow create: if !exists(/databases/$(database)/documents/photos/$(photoId)) &&
+        isEventPhotoSubmissionOpen(request.resource.data.eventId) &&
+        isValidPhoto(request.resource.data, photoId) &&
+        request.resource.data.status in ['active', 'visible'] &&
+        getAfter(/databases/$(database)/documents/cameraSessions/$(request.resource.data.sessionId)).data.usedShots == request.resource.data.shotNumber;
 
-      // Guests CANNOT modify or delete any photo record (own or another guest's).
-      // Only authorized Admins can moderate status ('active' | 'visible' | 'hidden') or delete.
-      allow update: if isAdmin()
-                    && request.resource.data.guestId == resource.data.guestId
-                    && request.resource.data.eventId == resource.data.eventId
-                    && request.resource.data.compressedImage == resource.data.compressedImage
-                    && request.resource.data.status in ['active', 'visible', 'hidden'];
+      // Only verified Admins can moderate status ('active' | 'visible' | 'hidden'); all other fields immutable.
+      allow update: if isAdmin() &&
+        isValidPhoto(request.resource.data, photoId) &&
+        areImmutableFieldsUnchanged([
+          'id', 'eventId', 'guestId', 'guestName', 'department',
+          'sessionId', 'shotNumber', 'filename', 'compressedImage',
+          'imageFormat', 'width', 'height', 'sizeBytes',
+          'capturedAt', 'capturedAtIso', 'uploadedAt', 'uploadedAtIso',
+          'flashUsed', 'facingMode', 'preset', 'overlay',
+          'storageProvider', 'isPublicStorage'
+        ]);
 
       allow delete: if isAdmin();
     }

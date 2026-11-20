@@ -33,8 +33,11 @@ import {
 import {
   getCurrentAdminSession,
   signInAdmin,
+  signInAdminWithGoogle,
+  signInGuestWithGoogle,
   signOutAdmin,
-  type AdminUserSession
+  type AdminUserSession,
+  type GoogleGuestProfile
 } from '@/services/adminAuth'
 
 export const useSessionStore = defineStore('xmasRollSession', () => {
@@ -284,6 +287,16 @@ export const useSessionStore = defineStore('xmasRollSession', () => {
     return session
   }
 
+  async function loginAdminWithGoogle(): Promise<AdminUserSession> {
+    const session = await signInAdminWithGoogle()
+    adminUser.value = session
+    return session
+  }
+
+  async function authenticateGuestWithGoogle(): Promise<GoogleGuestProfile> {
+    return await signInGuestWithGoogle()
+  }
+
   async function logoutAdmin(): Promise<void> {
     await signOutAdmin()
     adminUser.value = null
@@ -320,6 +333,8 @@ export const useSessionStore = defineStore('xmasRollSession', () => {
     saveEventConfiguration,
     hydrateAdminAuth,
     loginAdmin,
+    loginAdminWithGoogle,
+    authenticateGuestWithGoogle,
     logoutAdmin
   }
 })
