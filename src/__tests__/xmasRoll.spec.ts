@@ -367,13 +367,17 @@ describe('XMAS ROLL — End-to-End Domain & Dual Image Storage Verification', ()
     ])
   })
 
-  it('9. Verifies Admin authentication, viewing all compressed photos, and photo moderation', async () => {
+  it('9. Verifies single-account Admin authentication, viewing all compressed photos, and photo moderation', async () => {
     await expect(signInAdmin('intruder@hacker.com', 'password123')).rejects.toThrow(
       /Access denied/i
     )
+    await expect(signInAdmin('organizer@xmasroll.local', 'xmas2026')).rejects.toThrow(
+      /Access denied/i
+    )
 
-    const adminSession = await signInAdmin('organizer@xmasroll.local', 'xmas2026')
+    const adminSession = await signInAdmin('admin', 'JMallXmas2026!')
     expect(adminSession.isAdminVerified).toBe(true)
+    expect(adminSession.email).toBe('admin@jmall.com')
 
     const { guest, session } = await registerGuest({
       fullName: 'Maria Santos',

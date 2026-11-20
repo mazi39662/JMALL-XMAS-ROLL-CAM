@@ -60,14 +60,16 @@ if (isFirebaseConfigured) {
 
 export const DEFAULT_EVENT_ID = import.meta.env.VITE_DEFAULT_EVENT_ID?.trim() || 'xmas-party-2026'
 
+export const SINGLE_ADMIN_USERNAME = 'admin'
+export const SINGLE_ADMIN_EMAIL = 'admin@jmall.com'
+
 export function getAuthorizedAdminEmails(): string[] {
-  const raw =
-    import.meta.env.VITE_ADMIN_EMAILS ||
-    'mazi39662@gmail.com,organizer@xmasroll.local,admin@jmall.com'
-  return raw
+  const raw = import.meta.env.VITE_ADMIN_EMAILS || SINGLE_ADMIN_EMAIL
+  const parsed = raw
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean)
+  return parsed.length > 0 ? [parsed[0]!] : [SINGLE_ADMIN_EMAIL]
 }
 
 export { app, auth, db }

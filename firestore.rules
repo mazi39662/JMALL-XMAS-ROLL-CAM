@@ -177,16 +177,14 @@ service cloud.firestore {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
     }
 
-    // Check if the authenticated user is a verified Admin
-    // Checks custom claim `admin == true`, presence in `admins/{uid}` with role == 'admin',
-    // or verified organizer email allowlist.
+    // Check if the authenticated user is the single verified Admin account
     function isAdmin() {
       return isAuthenticated() && (
         request.auth.token.admin == true ||
         (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin') ||
         ('email' in request.auth.token &&
-         request.auth.token.email in ['mazi39662@gmail.com', 'admin@jmall.com', 'organizer@xmasroll.local'])
+         request.auth.token.email == 'admin@jmall.com')
       );
     }
 

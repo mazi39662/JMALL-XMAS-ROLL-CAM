@@ -14,16 +14,16 @@ import {
   Zap,
   ZapOff
 } from 'lucide-vue-next'
-import GuestHeader from '@/components/GuestHeader.vue'
-import { useDisposableCamera } from '@/composables/useDisposableCamera'
+import GuestHeader from '../components/GuestHeader.vue'
+import { useDisposableCamera } from '../composables/useDisposableCamera'
 import {
   FILM_FILTER_OPTIONS,
   FILM_OVERLAY_OPTIONS,
   reprocessCapturedFrame,
   type ProcessedFilmFrame
-} from '@/services/filmProcessor'
-import { useSessionStore } from '@/stores/sessionStore'
-import type { FilmFilterPreset, FilmOverlayPreset } from '@/types'
+} from '../services/filmProcessor'
+import { useSessionStore } from '../stores/sessionStore'
+import type { FilmFilterPreset, FilmOverlayPreset } from '../types'
 
 const sessionStore = useSessionStore()
 const router = useRouter()
@@ -78,9 +78,14 @@ const isShutterDisabled = computed(() => {
   return (
     !isCameraOperational.value ||
     isShutterFiring.value ||
+    isSwitchingCamera.value ||
     isUploading.value ||
     Boolean(pendingCapture.value)
   )
+})
+
+const firstPendingUpload = computed(() => {
+  return sessionStore.pendingUploads[0] ?? null
 })
 
 onMounted(async () => {
@@ -104,12 +109,12 @@ async function selectOverlay(overlayId: FilmOverlayPreset) {
 }
 
 async function updatePendingPreviewIfOpen() {
-  if (!pendingCapture.value?.sourceCanvas || isReprocessing.value) return
+  const current = pendingCapture.value
+  if (!current?.sourceCanvas || isReprocessing.value) return
   isReprocessing.value = true
   try {
-    const current = pendingCapture.value
     pendingCapture.value = await reprocessCapturedFrame(
-      current.sourceCanvas!,
+      current.sourceCanvas,
       current.rawOriginalBlob || current.originalBlob,
       current.originalPreviewDataUrl,
       filmConfig.value,
@@ -120,6 +125,19 @@ async function updatePendingPreviewIfOpen() {
   } finally {
     isReprocessing.value = false
   }
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message
+  }
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message
+    if (typeof msg === 'string' && msg.trim().length > 0) {
+      return msg
+    }
+  }
+  return fallback
 }
 
 async function handleShutterPress() {
@@ -133,8 +151,8 @@ async function handleShutterPress() {
     pendingCapturedAt.value = capturedIso
     previewMode.value = 'processed'
     pendingCapture.value = frame
-  } catch (err: any) {
-    uploadError.value = err?.message || 'Could not capture photo.'
+  } catch (err: unknown) {
+    uploadError.value = extractErrorMessage(err, 'Could not capture photo.')
   }
 }
 
@@ -181,9 +199,11 @@ async function handleConfirmAndDevelop() {
     setTimeout(() => {
       justUploadedBanner.value = ''
     }, 3600)
-  } catch (err: any) {
-    uploadError.value =
-      err?.message || 'Upload failed. Shot was not used—please try again.'
+  } catch (err: unknown) {
+    uploadError.value = extractErrorMessage(
+      err,
+      'Upload failed. Shot was not used—please try again.'
+    )
   } finally {
     isUploading.value = false
   }
@@ -199,8 +219,11 @@ async function handleRetryInterruptedUpload(photoId: string) {
     setTimeout(() => {
       justUploadedBanner.value = ''
     }, 3600)
-  } catch (err: any) {
-    uploadError.value = err?.message || 'Could not retry photo upload. Shot was not consumed.'
+  } catch (err: unknown) {
+    uploadError.value = extractErrorMessage(
+      err,
+      'Could not retry photo upload. Shot was not consumed.'
+    )
   } finally {
     retryingPendingId.value = null
   }
@@ -250,7 +273,7 @@ async function handleDiscardInterruptedUpload(photoId: string) {
         <div class="viewfinder-bezel">
           <div class="viewfinder-viewport" :class="{ shuttering: isShutterFiring }">
             <video
-              v-show="permissionStatus === 'granted'"
+              v-show="permissionStatus !== 'fallback'"
               ref="videoRef"
               class="viewfinder-video"
               :class="[
@@ -263,12 +286,15 @@ async function handleDiscardInterruptedUpload(photoId: string) {
             ></video>
 
             <canvas
-              v-show="permissionStatus !== 'granted'"
+              v-show="permissionStatus === 'fallback'"
               ref="fallbackCanvasRef"
               width="640"
               height="960"
               class="viewfinder-canvas"
-              :class="[`preset-${filmConfig.warmthPreset}`]"
+              :class="[
+                `preset-${filmConfig.warmthPreset}`,
+                { mirrored: facingMode === 'user' }
+              ]"
             ></canvas>
 
             <div class="vf-grain-overlay" aria-hidden="true"></div>
@@ -529,13 +555,20 @@ async function handleDiscardInterruptedUpload(photoId: string) {
           <button
             type="button"
             class="deck-side-btn"
+            :class="{ active: facingMode === 'user' }"
             :disabled="isSwitchingCamera || sessionStore.isRollExhausted"
-            aria-label="Switch Camera"
+            :aria-label="
+              facingMode === 'environment'
+                ? 'Using Back Camera — Tap to switch to Front Camera'
+                : 'Using Front Camera — Tap to switch to Back Camera'
+            "
             data-testid="switch-camera-btn"
             @click="switchCameraFacing"
           >
             <SwitchCamera :size="20" />
-            <span class="side-btn-label font-mono">FLIP</span>
+            <span class="side-btn-label font-mono">
+              {{ facingMode === 'environment' ? 'FRONT CAM' : 'BACK CAM' }}
+            </span>
           </button>
         </div>
 
@@ -548,7 +581,7 @@ async function handleDiscardInterruptedUpload(photoId: string) {
 
         <!-- PENDING / INTERRUPTED UPLOAD RECOVERY BAR -->
         <div
-          v-if="!pendingCapture && sessionStore.pendingUploads.length > 0 && !sessionStore.isRollExhausted"
+          v-if="!pendingCapture && firstPendingUpload && !sessionStore.isRollExhausted"
           class="pending-recovery-bar"
           role="region"
           aria-label="Pending Photo Upload Recovery"
@@ -566,12 +599,12 @@ async function handleDiscardInterruptedUpload(photoId: string) {
               class="btn btn-gold btn-xs"
               :disabled="Boolean(retryingPendingId)"
               data-testid="retry-pending-camera-btn"
-              @click="handleRetryInterruptedUpload(sessionStore.pendingUploads[0]!.photoId)"
+              @click="handleRetryInterruptedUpload(firstPendingUpload.photoId)"
             >
               <RefreshCw :size="13" />
               <span>
                 {{
-                  retryingPendingId === sessionStore.pendingUploads[0]!.photoId
+                  retryingPendingId === firstPendingUpload.photoId
                     ? 'Retrying...'
                     : 'Retry Upload'
                 }}
@@ -581,7 +614,7 @@ async function handleDiscardInterruptedUpload(photoId: string) {
               type="button"
               class="btn btn-outline btn-xs discard-pending-btn"
               :disabled="Boolean(retryingPendingId)"
-              @click="handleDiscardInterruptedUpload(sessionStore.pendingUploads[0]!.photoId)"
+              @click="handleDiscardInterruptedUpload(firstPendingUpload.photoId)"
             >
               <span>Discard</span>
             </button>
@@ -1438,6 +1471,7 @@ async function handleDiscardInterruptedUpload(photoId: string) {
   inset: 0;
   z-index: 200;
   background: rgba(12, 15, 14, 0.92);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;

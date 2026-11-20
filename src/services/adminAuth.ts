@@ -6,13 +6,15 @@ import {
   signOut as firebaseSignOut,
   type User
 } from 'firebase/auth'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { doc, setDoc } from 'firebase/firestore'
 import {
   auth,
   db,
   getAuthorizedAdminEmails,
   googleProvider,
-  isFirebaseConfigured
+  isFirebaseConfigured,
+  SINGLE_ADMIN_EMAIL,
+  SINGLE_ADMIN_USERNAME
 } from './firebase'
 
 const LOCAL_ADMIN_SESSION_KEY = 'xmas_roll_admin_session_v1'
@@ -33,8 +35,38 @@ export interface GoogleGuestProfile {
   photoURL?: string
 }
 
-function formatFirebaseAuthError(err: any): string {
-  const code = err?.code || ''
+function getSingleAuthorizedAdminEmail(): string {
+  const allowed = getAuthorizedAdminEmails()
+  return (allowed[0] || SINGLE_ADMIN_EMAIL).toLowerCase()
+}
+
+export function resolveAdminLoginEmail(usernameOrEmail: string): string {
+  const normalized = usernameOrEmail.trim().toLowerCase()
+  if (normalized === SINGLE_ADMIN_USERNAME) {
+    return getSingleAuthorizedAdminEmail()
+  }
+  return normalized
+}
+
+function extractErrorCode(err: unknown): string {
+  if (typeof err === 'object' && err !== null && 'code' in err) {
+    const code = (err as { code?: unknown }).code
+    if (typeof code === 'string') return code
+  }
+  return ''
+}
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message
+    if (typeof msg === 'string') return msg
+  }
+  return ''
+}
+
+function formatFirebaseAuthError(err: unknown): string {
+  const code = extractErrorCode(err)
   if (code === 'auth/unauthorized-domain') {
     return 'Google Sign-In error [auth/unauthorized-domain]: Please ensure this domain (e.g., localhost) is in the Authorized Domains list in Firebase Console > Authentication > Settings.'
   }
@@ -47,45 +79,23 @@ function formatFirebaseAuthError(err: any): string {
   if (
     code === 'auth/invalid-credential' ||
     code === 'auth/wrong-password' ||
-    code === 'auth/user-not-found'
+    code === 'auth/user-not-found' ||
+    code === 'auth/invalid-email'
   ) {
-    return 'Invalid admin email or password.'
+    return 'Invalid admin username or password.'
   }
-  return err?.message || 'Authentication failed. Please try again.'
+  return extractErrorMessage(err) || 'Authentication failed. Please try again.'
 }
 
 /**
- * Verifies whether a Firebase User holds admin privileges via:
- * 1. Custom token claim `admin === true`
- * 2. Presence in Firestore `admins/{uid}` collection
- * 3. Match against configured `VITE_ADMIN_EMAILS` allowlist
+ * Verifies whether a Firebase User is the single authorized XMAS ROLL admin account.
  */
 export async function verifyFirebaseUserAdminRole(user: User): Promise<boolean> {
-  try {
-    const tokenResult = await user.getIdTokenResult()
-    if (tokenResult.claims.admin === true) {
-      return true
-    }
-  } catch {
-    // Continue to Firestore / allowlist check
-  }
+  const email = user.email?.trim().toLowerCase() || ''
+  const singleAdminEmail = getSingleAuthorizedAdminEmail()
+  const isAuthorized = Boolean(email && email === singleAdminEmail)
 
-  if (db) {
-    try {
-      const adminDoc = await getDoc(doc(db, 'admins', user.uid))
-      if (adminDoc.exists() && adminDoc.data()?.role === 'admin') {
-        return true
-      }
-    } catch {
-      // Continue to allowlist check
-    }
-  }
-
-  const email = user.email?.toLowerCase() || ''
-  const allowlist = getAuthorizedAdminEmails()
-  const isAllowlisted = Boolean(email && allowlist.includes(email))
-
-  if (isAllowlisted && db) {
+  if (isAuthorized && db) {
     try {
       await setDoc(
         doc(db, 'admins', user.uid),
@@ -101,18 +111,23 @@ export async function verifyFirebaseUserAdminRole(user: User): Promise<boolean> 
     }
   }
 
-  return isAllowlisted
+  return isAuthorized
 }
 
 export async function signInAdmin(
-  emailInput: string,
+  usernameOrEmailInput: string,
   passwordInput: string
 ): Promise<AdminUserSession> {
-  const email = emailInput.trim().toLowerCase()
+  const email = resolveAdminLoginEmail(usernameOrEmailInput)
   const password = passwordInput.trim()
 
   if (!email || !password) {
-    throw new Error('Please enter both your admin email and password.')
+    throw new Error('Please enter both your admin username and password.')
+  }
+
+  const singleAdminEmail = getSingleAuthorizedAdminEmail()
+  if (email !== singleAdminEmail) {
+    throw new Error('Access denied: Invalid admin username or password.')
   }
 
   if (isFirebaseConfigured && auth) {
@@ -122,41 +137,36 @@ export async function signInAdmin(
       if (!isVerified) {
         await firebaseSignOut(auth)
         throw new Error(
-          'Access denied: This account does not have organizer/admin permissions for XMAS ROLL.'
+          'Access denied: This account does not have admin permissions for XMAS ROLL.'
         )
       }
 
       return {
         uid: credential.user.uid,
         email: credential.user.email || email,
-        displayName: credential.user.displayName || undefined,
+        displayName: credential.user.displayName || 'Admin',
         photoURL: credential.user.photoURL || undefined,
         isAdminVerified: true,
         authProvider: 'firebase'
       }
-    } catch (err: any) {
-      if (err?.message?.startsWith('Access denied:')) {
-        throw err
+    } catch (err: unknown) {
+      const msg = extractErrorMessage(err)
+      if (msg.startsWith('Access denied:')) {
+        throw err instanceof Error ? err : new Error(msg)
       }
       throw new Error(formatFirebaseAuthError(err))
     }
   }
 
-  // Local Development Auth Adapter (Only active in test / unconfigured mode)
-  const allowedEmails = getAuthorizedAdminEmails()
-  if (!allowedEmails.includes(email)) {
-    throw new Error(
-      `Access denied: "${email}" is not in VITE_ADMIN_EMAILS (${allowedEmails.join(', ')}).`
-    )
-  }
-
+  // Local test-mode adapter (only active when Firebase is disabled in tests)
   if (password.length < 6) {
-    throw new Error('Invalid organizer password (minimum 6 characters).')
+    throw new Error('Invalid admin password (minimum 6 characters).')
   }
 
   const session: AdminUserSession = {
     uid: `local_admin_${btoa(email).replace(/=/g, '')}`,
     email,
+    displayName: 'Admin',
     isAdminVerified: true,
     authProvider: 'local-dev'
   }
@@ -165,7 +175,7 @@ export async function signInAdmin(
 }
 
 /**
- * Signs in an organizer/admin using Google Sign-In (`signInWithPopup` + `GoogleAuthProvider`)
+ * Legacy helper kept for compatibility; strictly enforces the single authorized admin email.
  */
 export async function signInAdminWithGoogle(): Promise<AdminUserSession> {
   if (isFirebaseConfigured && auth) {
@@ -178,33 +188,32 @@ export async function signInAdminWithGoogle(): Promise<AdminUserSession> {
       if (!isVerified) {
         await firebaseSignOut(auth)
         throw new Error(
-          `Access denied: "${user.email || 'Your Google account'}" is not authorized as an organizer/admin for XMAS ROLL.`
+          'Access denied: Only the designated single admin account can access the admin panel.'
         )
       }
 
       return {
         uid: user.uid,
         email: user.email || '',
-        displayName: user.displayName || undefined,
+        displayName: user.displayName || 'Admin',
         photoURL: user.photoURL || undefined,
         isAdminVerified: true,
         authProvider: 'google'
       }
-    } catch (err: any) {
-      if (err?.message?.startsWith('Access denied:')) {
-        throw err
+    } catch (err: unknown) {
+      const msg = extractErrorMessage(err)
+      if (msg.startsWith('Access denied:')) {
+        throw err instanceof Error ? err : new Error(msg)
       }
       throw new Error(formatFirebaseAuthError(err))
     }
   }
 
-  // Fallback for local test mode when Firebase is disabled
-  const allowedEmails = getAuthorizedAdminEmails()
-  const fallbackEmail = allowedEmails[0] || 'mazi39662@gmail.com'
+  const singleAdminEmail = getSingleAuthorizedAdminEmail()
   const session: AdminUserSession = {
-    uid: `local_google_admin_${btoa(fallbackEmail).replace(/=/g, '')}`,
-    email: fallbackEmail,
-    displayName: 'Organizer (Google)',
+    uid: `local_google_admin_${btoa(singleAdminEmail).replace(/=/g, '')}`,
+    email: singleAdminEmail,
+    displayName: 'Admin',
     isAdminVerified: true,
     authProvider: 'google'
   }
@@ -230,7 +239,7 @@ export async function signInGuestWithGoogle(): Promise<GoogleGuestProfile> {
         email,
         photoURL: user.photoURL || undefined
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw new Error(formatFirebaseAuthError(err))
     }
   }
@@ -268,7 +277,7 @@ export function getCurrentAdminSession(): Promise<AdminUserSession | null> {
         resolve({
           uid: user.uid,
           email: user.email || '',
-          displayName: user.displayName || undefined,
+          displayName: user.displayName || 'Admin',
           photoURL: user.photoURL || undefined,
           isAdminVerified: true,
           authProvider: isGoogle ? 'google' : 'firebase'
@@ -281,7 +290,12 @@ export function getCurrentAdminSession(): Promise<AdminUserSession | null> {
     const raw = sessionStorage.getItem(LOCAL_ADMIN_SESSION_KEY)
     if (!raw) return Promise.resolve(null)
     const parsed = JSON.parse(raw) as AdminUserSession
-    if (parsed && parsed.isAdminVerified && parsed.email) {
+    const singleAdminEmail = getSingleAuthorizedAdminEmail()
+    if (
+      parsed &&
+      parsed.isAdminVerified &&
+      parsed.email?.toLowerCase() === singleAdminEmail
+    ) {
       return Promise.resolve(parsed)
     }
     return Promise.resolve(null)
