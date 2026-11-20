@@ -20,24 +20,26 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Trash2,
   Users,
   X
 } from 'lucide-vue-next'
-import { isFirebaseConfigured } from '@/services/firebase'
+import { isFirebaseConfigured } from '../services/firebase'
 import {
+  deletePhotoForAdmin,
   fetchAllGuestsForAdmin,
   fetchAllPhotosForAdmin,
   isPhotoVisibleStatus,
   updatePhotoModerationStatus
-} from '@/services/repository'
-import { getStorageProvider } from '@/services/storageAdapter'
+} from '../services/repository'
+import { getStorageProvider } from '../services/storageAdapter'
 import {
   downloadEventPhotosAsZip,
   downloadSinglePhoto,
   triggerBlobDownload
-} from '@/services/zipExporter'
-import { useSessionStore } from '@/stores/sessionStore'
-import type { AdminDashboardStats, Guest, PhotoRecord } from '@/types'
+} from '../services/zipExporter'
+import { useSessionStore } from '../stores/sessionStore'
+import type { AdminDashboardStats, Guest, PhotoRecord } from '../types'
 
 const sessionStore = useSessionStore()
 const router = useRouter()
@@ -58,7 +60,8 @@ const photoGuestFilter = ref<string>('all')
 const photoStatusFilter = ref<'all' | 'visible' | 'hidden'>('all')
 const photoSortBy = ref<'latest' | 'oldest' | 'guest'>('latest')
 const selectedPhotoModal = ref<PhotoRecord | null>(null)
-const modalViewOriginal = ref(false)
+const confirmDeletePhoto = ref<PhotoRecord | null>(null)
+const deletingPhotoId = ref<string | null>(null)
 
 // --- ZIP Export Options ---
 const zipOptions = reactive({
@@ -200,6 +203,15 @@ function syncSettingsFormFromStore() {
   settingsForm.photoSubmissionOpen = sessionStore.event.photoSubmissionOpen
 }
 
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message
+    if (typeof msg === 'string' && msg.trim().length > 0) return msg
+  }
+  return fallback
+}
+
 async function loadAllDashboardData() {
   isRefreshing.value = true
   errorBanner.value = ''
@@ -212,8 +224,8 @@ async function loadAllDashboardData() {
     ])
     guests.value = loadedGuests
     photos.value = loadedPhotos
-  } catch (err: any) {
-    errorBanner.value = err?.message || 'Failed to load dashboard data.'
+  } catch (err: unknown) {
+    errorBanner.value = extractErrorMessage(err, 'Failed to load dashboard data.')
   } finally {
     isRefreshing.value = false
   }
@@ -227,7 +239,7 @@ function showTransientToast(msg: string) {
 }
 
 // ============================================================================
-// PHOTO MODERATION & DOWNLOAD ACTIONS
+// PHOTO MODERATION, DELETION & DOWNLOAD ACTIONS
 // ============================================================================
 async function handleTogglePhotoStatus(photo: PhotoRecord) {
   const nextStatus = isPhotoVisibleStatus(photo.status) ? 'hidden' : 'active'
@@ -243,8 +255,38 @@ async function handleTogglePhotoStatus(photo: PhotoRecord) {
     showTransientToast(
       `Photo ${photo.filename} marked as ${nextStatus.toUpperCase()}.`
     )
-  } catch (err: any) {
-    errorBanner.value = err?.message || 'Could not update photo moderation status.'
+  } catch (err: unknown) {
+    errorBanner.value = extractErrorMessage(err, 'Could not update photo moderation status.')
+  }
+}
+
+function requestDeletePhoto(photo: PhotoRecord) {
+  confirmDeletePhoto.value = photo
+}
+
+function cancelDeletePhoto() {
+  if (deletingPhotoId.value) return
+  confirmDeletePhoto.value = null
+}
+
+async function handleDeletePhotoConfirmed() {
+  const target = confirmDeletePhoto.value
+  if (!target || deletingPhotoId.value) return
+
+  deletingPhotoId.value = target.id
+  errorBanner.value = ''
+  try {
+    await deletePhotoForAdmin(target.id)
+    photos.value = photos.value.filter((p) => p.id !== target.id)
+    if (selectedPhotoModal.value?.id === target.id) {
+      selectedPhotoModal.value = null
+    }
+    confirmDeletePhoto.value = null
+    showTransientToast(`Deleted photo ${target.filename}.`)
+  } catch (err: unknown) {
+    errorBanner.value = extractErrorMessage(err, 'Failed to delete photo.')
+  } finally {
+    deletingPhotoId.value = null
   }
 }
 
@@ -255,8 +297,8 @@ async function handleDownloadSingle(photo: PhotoRecord) {
       useOriginal: false
     })
     showTransientToast(`Downloaded compressed photo ${savedName}`)
-  } catch (err: any) {
-    errorBanner.value = err?.message || 'Failed to download photo.'
+  } catch (err: unknown) {
+    errorBanner.value = extractErrorMessage(err, 'Failed to download photo.')
   }
 }
 
@@ -289,8 +331,8 @@ async function handleBulkZipExport() {
     showTransientToast(
       `Exported ${result.exportedCount} compressed photos into ZIP archive!`
     )
-  } catch (err: any) {
-    errorBanner.value = err?.message || 'Failed to export ZIP archive.'
+  } catch (err: unknown) {
+    errorBanner.value = extractErrorMessage(err, 'Failed to export ZIP archive.')
   } finally {
     isExportingZip.value = false
   }
@@ -339,8 +381,8 @@ async function handleSaveEventSettings() {
       photoSubmissionOpen: settingsForm.photoSubmissionOpen
     })
     showTransientToast('Event settings updated!')
-  } catch (err: any) {
-    errorBanner.value = err?.message || 'Failed to save event settings.'
+  } catch (err: unknown) {
+    errorBanner.value = extractErrorMessage(err, 'Failed to save event settings.')
   } finally {
     isSavingSettings.value = false
   }
@@ -665,10 +707,7 @@ function formatDateTime(iso: string): string {
 
             <div
               class="photo-thumb-box"
-              @click="
-                selectedPhotoModal = photo;
-                modalViewOriginal = false
-              "
+              @click="selectedPhotoModal = photo"
             >
               <img :src="photo.compressedImage || photo.imageUrl" :alt="photo.filename" loading="lazy" />
             </div>
@@ -703,6 +742,17 @@ function formatDateTime(iso: string): string {
                 >
                   <EyeOff v-if="isPhotoVisibleStatus(photo.status)" :size="16" />
                   <Eye v-else :size="16" />
+                </button>
+                <button
+                  type="button"
+                  class="icon-action-btn danger"
+                  title="Delete photo permanently"
+                  aria-label="Delete photo permanently"
+                  data-testid="delete-photo-btn"
+                  :disabled="deletingPhotoId === photo.id"
+                  @click="requestDeletePhoto(photo)"
+                >
+                  <Trash2 :size="16" />
                 </button>
               </div>
             </div>
@@ -1038,8 +1088,8 @@ function formatDateTime(iso: string): string {
               <span>
                 {{
                   isPhotoVisibleStatus(selectedPhotoModal.status)
-                    ? 'Hide Photo from Gallery'
-                    : 'Restore Photo to Gallery'
+                    ? 'Hide from Gallery'
+                    : 'Restore to Gallery'
                 }}
               </span>
             </button>
@@ -1050,7 +1100,77 @@ function formatDateTime(iso: string): string {
               @click="handleDownloadSingle(selectedPhotoModal)"
             >
               <Download :size="17" />
-              <span>Download Compressed Photo (JPEG)</span>
+              <span>Download (JPEG)</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-red"
+              data-testid="modal-delete-photo-btn"
+              :disabled="deletingPhotoId === selectedPhotoModal.id"
+              @click="requestDeletePhoto(selectedPhotoModal)"
+            >
+              <Trash2 :size="17" />
+              <span>Delete Photo</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- =====================================================================
+         CONFIRM DELETE PHOTO MODAL
+         ===================================================================== -->
+    <Transition name="fade">
+      <div
+        v-if="confirmDeletePhoto"
+        class="modal-backdrop delete-confirm-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Confirm photo deletion"
+        @click.self="cancelDeletePhoto"
+      >
+        <div class="confirm-delete-modal retro-card">
+          <div class="confirm-delete-head">
+            <div class="danger-icon-badge">
+              <Trash2 :size="20" />
+            </div>
+            <div>
+              <h3>Delete Photo Permanently?</h3>
+              <p>This removes the photo from the event gallery and cannot be undone.</p>
+            </div>
+          </div>
+
+          <div class="confirm-delete-preview">
+            <img
+              :src="confirmDeletePhoto.compressedImage || confirmDeletePhoto.imageUrl"
+              :alt="confirmDeletePhoto.filename"
+            />
+            <div class="confirm-delete-meta">
+              <strong>{{ confirmDeletePhoto.guestName }}</strong>
+              <span class="font-mono">{{ confirmDeletePhoto.filename }}</span>
+              <span class="font-mono">{{ formatDateTime(confirmDeletePhoto.capturedAt) }}</span>
+            </div>
+          </div>
+
+          <div class="confirm-delete-actions">
+            <button
+              type="button"
+              class="btn btn-outline"
+              :disabled="Boolean(deletingPhotoId)"
+              @click="confirmDeletePhoto = null"
+            >
+              <span>Cancel</span>
+            </button>
+            <button
+              type="button"
+              class="btn btn-red"
+              data-testid="confirm-delete-photo-btn"
+              :disabled="Boolean(deletingPhotoId)"
+              @click="handleDeletePhotoConfirmed"
+            >
+              <Trash2 :size="16" />
+              <span>{{ deletingPhotoId ? 'Deleting...' : 'Delete Permanently' }}</span>
             </button>
           </div>
         </div>
@@ -1620,6 +1740,16 @@ function formatDateTime(iso: string): string {
     background: var(--xmas-red);
     color: var(--bg-cream);
   }
+
+  &.danger {
+    color: var(--xmas-red);
+
+    &:hover:not(:disabled) {
+      background: var(--xmas-red);
+      color: var(--bg-cream);
+      border-color: var(--xmas-red-dark);
+    }
+  }
 }
 
 /* GUEST MANAGEMENT TABLE */
@@ -1924,11 +2054,100 @@ function formatDateTime(iso: string): string {
   inset: 0;
   z-index: 300;
   background: rgba(12, 15, 14, 0.88);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 1rem;
+}
+
+.delete-confirm-backdrop {
+  z-index: 350;
+}
+
+.confirm-delete-modal {
+  width: 100%;
+  max-width: 420px;
+  padding: 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  border-top: 4px solid var(--xmas-red);
+}
+
+.confirm-delete-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+
+  .danger-icon-badge {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--xmas-red-subtle);
+    color: var(--xmas-red);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  h3 {
+    font-size: 1.15rem;
+    color: var(--charcoal);
+  }
+
+  p {
+    font-size: 0.84rem;
+    color: var(--charcoal-muted);
+    margin-top: 0.15rem;
+  }
+}
+
+.confirm-delete-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.65rem;
+  background: var(--bg-cream);
+  border: 1px solid var(--charcoal-border);
+  border-radius: var(--radius-md);
+
+  img {
+    width: 54px;
+    height: 81px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: #101211;
+  }
+}
+
+.confirm-delete-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+
+  strong {
+    font-size: 0.92rem;
+    color: var(--forest-green);
+  }
+
+  span {
+    font-size: 0.72rem;
+    color: var(--charcoal-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.confirm-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
 }
 
 .photo-detail-modal,

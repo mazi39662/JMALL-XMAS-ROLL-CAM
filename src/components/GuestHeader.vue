@@ -88,6 +88,7 @@ const shotBadgeText = computed(() => {
   top: 0;
   z-index: 100;
   background: rgba(245, 240, 230, 0.95);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   border-bottom: 1.5px solid var(--charcoal-border);
 }

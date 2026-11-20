@@ -334,6 +334,7 @@ function handlePrimaryCta() {
 .camera-artifact {
   width: 100%;
   max-width: 340px;
+  -webkit-user-select: none;
   user-select: none;
 }
 

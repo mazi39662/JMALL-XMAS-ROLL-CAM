@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearLocalDatabaseForTesting,
+  deletePhotoForAdmin,
   fetchAllGuestsForAdmin,
   fetchAllPhotosForAdmin,
   fetchCameraSessionById,
@@ -405,6 +406,10 @@ describe('XMAS ROLL — End-to-End Domain & Dual Image Storage Verification', ()
     expect(allGuests.length).toBe(1)
     expect(allPhotos.length).toBe(1)
     expect(allPhotos[0]!.compressedImage).toMatch(/^data:image\/jpeg;base64,/)
+
+    await deletePhotoForAdmin(photo.id)
+    const remainingPhotos = await fetchAllPhotosForAdmin()
+    expect(remainingPhotos.length).toBe(0)
 
     await signOutAdmin()
   })

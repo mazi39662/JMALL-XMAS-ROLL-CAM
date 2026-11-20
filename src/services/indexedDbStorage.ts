@@ -613,6 +613,30 @@ export async function getAllLocalFallbackPhotoRecords(): Promise<PhotoRecord[]> 
 }
 
 /**
+ * Deletes a compressed PhotoRecord from IndexedDB fallback store (used in local/test admin deletion).
+ */
+export async function deleteLocalFallbackPhotoRecord(photoId: string): Promise<void> {
+  if (!isIndexedDbAvailable()) return
+  try {
+    const db = await openXmasRollDatabase()
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(LOCAL_FIRESTORE_PHOTOS_STORE, 'readwrite')
+      tx.objectStore(LOCAL_FIRESTORE_PHOTOS_STORE).delete(photoId)
+      tx.oncomplete = () => {
+        db.close()
+        resolve()
+      }
+      tx.onerror = () => {
+        db.close()
+        resolve()
+      }
+    })
+  } catch {
+    // Ignore fallback persistence errors if IndexedDB is disabled
+  }
+}
+
+/**
  * Clears all records in `xmas_roll_db` (used in unit/integration test resets).
  */
 export async function clearIndexedDbForTesting(): Promise<void> {

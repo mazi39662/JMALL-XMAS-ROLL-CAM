@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -21,6 +22,7 @@ import {
   validateFirestoreDocumentSize
 } from './imageProcessor'
 import {
+  deleteLocalFallbackPhotoRecord,
   getAllLocalFallbackPhotoRecords,
   getOriginalPhoto,
   getPendingUploads,
@@ -1192,4 +1194,26 @@ export async function updatePhotoModerationStatus(
   localFirestorePhotosStore.set(photoId, updated)
   await saveLocalFallbackPhotoRecord(updated)
   return { ...updated }
+}
+
+/**
+ * Admin-only Moderation: Permanently delete a photo document from Firestore / local store.
+ */
+export async function deletePhotoForAdmin(photoId: string): Promise<void> {
+  if (!photoId.trim()) {
+    throw new Error('Invalid photo ID.')
+  }
+
+  if (isFirebaseConfigured && db) {
+    const ref = doc(db, 'photos', photoId)
+    await deleteDoc(ref)
+    return
+  }
+
+  await ensureLocalFallbackPhotosHydrated()
+  if (!localFirestorePhotosStore.has(photoId)) {
+    throw new Error('Photo not found.')
+  }
+  localFirestorePhotosStore.delete(photoId)
+  await deleteLocalFallbackPhotoRecord(photoId)
 }

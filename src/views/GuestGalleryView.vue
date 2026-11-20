@@ -37,6 +37,7 @@ const timeSortOrder = ref<'newest' | 'oldest'>('newest')
 const isLoadingFeed = ref(false)
 
 type GridColumnCount = 1 | 2 | 3
+const GRID_COLUMN_OPTIONS: readonly GridColumnCount[] = [1, 2, 3]
 const GRID_COLS_STORAGE_KEY = 'xmas_roll_gallery_columns'
 
 function getInitialGridColumns(): GridColumnCount {
@@ -539,7 +540,7 @@ async function handleDiscardPending(photoId: string) {
         <div class="toolbar-controls">
           <div class="col-switcher" role="group" aria-label="Grid columns">
             <button
-              v-for="cols in ([1, 2, 3] as const)"
+              v-for="cols in GRID_COLUMN_OPTIONS"
               :key="cols"
               type="button"
               class="col-btn"
