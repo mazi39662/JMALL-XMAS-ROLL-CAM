@@ -60,8 +60,9 @@ const photoGuestFilter = ref<string>('all')
 const photoStatusFilter = ref<'all' | 'visible' | 'hidden'>('all')
 const photoSortBy = ref<'latest' | 'oldest' | 'guest'>('latest')
 const selectedPhotoModal = ref<PhotoRecord | null>(null)
-const confirmDeletePhoto = ref<PhotoRecord | null>(null)
-const deletingPhotoId = ref<string | null>(null)
+const selectedPhotoIds = ref<string[]>([])
+const confirmDeleteTargets = ref<PhotoRecord[]>([])
+const isDeletingPhotos = ref(false)
 
 // --- ZIP Export Options ---
 const zipOptions = reactive({
@@ -260,33 +261,105 @@ async function handleTogglePhotoStatus(photo: PhotoRecord) {
   }
 }
 
+const selectedPhotoIdSet = computed(() => new Set(selectedPhotoIds.value))
+
+const selectedFilteredPhotos = computed(() =>
+  filteredPhotos.value.filter((p) => selectedPhotoIdSet.value.has(p.id))
+)
+
+const allFilteredSelected = computed(
+  () =>
+    filteredPhotos.value.length > 0 &&
+    selectedFilteredPhotos.value.length === filteredPhotos.value.length
+)
+
+const someFilteredSelected = computed(
+  () => selectedFilteredPhotos.value.length > 0 && !allFilteredSelected.value
+)
+
+function isPhotoSelected(photoId: string): boolean {
+  return selectedPhotoIdSet.value.has(photoId)
+}
+
+function togglePhotoSelection(photoId: string) {
+  if (selectedPhotoIdSet.value.has(photoId)) {
+    selectedPhotoIds.value = selectedPhotoIds.value.filter((id) => id !== photoId)
+  } else {
+    selectedPhotoIds.value = [...selectedPhotoIds.value, photoId]
+  }
+}
+
+function toggleSelectAllFiltered() {
+  if (allFilteredSelected.value) {
+    const filteredIds = new Set(filteredPhotos.value.map((p) => p.id))
+    selectedPhotoIds.value = selectedPhotoIds.value.filter((id) => !filteredIds.has(id))
+  } else {
+    const merged = new Set(selectedPhotoIds.value)
+    for (const p of filteredPhotos.value) {
+      merged.add(p.id)
+    }
+    selectedPhotoIds.value = Array.from(merged)
+  }
+}
+
+function clearPhotoSelection() {
+  selectedPhotoIds.value = []
+}
+
 function requestDeletePhoto(photo: PhotoRecord) {
-  confirmDeletePhoto.value = photo
+  confirmDeleteTargets.value = [photo]
+}
+
+function requestDeleteSelectedPhotos() {
+  if (selectedFilteredPhotos.value.length === 0) return
+  confirmDeleteTargets.value = [...selectedFilteredPhotos.value]
 }
 
 function cancelDeletePhoto() {
-  if (deletingPhotoId.value) return
-  confirmDeletePhoto.value = null
+  if (isDeletingPhotos.value) return
+  confirmDeleteTargets.value = []
 }
 
 async function handleDeletePhotoConfirmed() {
-  const target = confirmDeletePhoto.value
-  if (!target || deletingPhotoId.value) return
+  const targets = confirmDeleteTargets.value
+  if (targets.length === 0 || isDeletingPhotos.value) return
 
-  deletingPhotoId.value = target.id
+  isDeletingPhotos.value = true
   errorBanner.value = ''
+  const deletedIds = new Set<string>()
+  let failedCount = 0
+
   try {
-    await deletePhotoForAdmin(target.id)
-    photos.value = photos.value.filter((p) => p.id !== target.id)
-    if (selectedPhotoModal.value?.id === target.id) {
-      selectedPhotoModal.value = null
+    for (const photo of targets) {
+      try {
+        await deletePhotoForAdmin(photo.id)
+        deletedIds.add(photo.id)
+      } catch {
+        failedCount++
+      }
     }
-    confirmDeletePhoto.value = null
-    showTransientToast(`Deleted photo ${target.filename}.`)
-  } catch (err: unknown) {
-    errorBanner.value = extractErrorMessage(err, 'Failed to delete photo.')
+
+    if (deletedIds.size > 0) {
+      photos.value = photos.value.filter((p) => !deletedIds.has(p.id))
+      selectedPhotoIds.value = selectedPhotoIds.value.filter((id) => !deletedIds.has(id))
+      if (selectedPhotoModal.value && deletedIds.has(selectedPhotoModal.value.id)) {
+        selectedPhotoModal.value = null
+      }
+    }
+
+    confirmDeleteTargets.value = []
+
+    if (failedCount > 0 && deletedIds.size > 0) {
+      errorBanner.value = `Deleted ${deletedIds.size} photo(s), but ${failedCount} failed to delete.`
+    } else if (failedCount > 0) {
+      errorBanner.value = 'Failed to delete selected photo(s). Please try again.'
+    } else if (deletedIds.size === 1) {
+      showTransientToast(`Deleted photo ${targets[0]!.filename}.`)
+    } else {
+      showTransientToast(`Deleted ${deletedIds.size} photos permanently.`)
+    }
   } finally {
-    deletingPhotoId.value = null
+    isDeletingPhotos.value = false
   }
 }
 
@@ -683,6 +756,54 @@ function formatDateTime(iso: string): string {
           </div>
         </div>
 
+        <!-- Bulk Select & Delete Bar -->
+        <div v-if="filteredPhotos.length > 0" class="bulk-select-bar retro-card">
+          <div class="bulk-select-left">
+            <label class="select-all-check">
+              <input
+                type="checkbox"
+                :checked="allFilteredSelected"
+                :indeterminate="someFilteredSelected"
+                data-testid="select-all-photos-checkbox"
+                @change="toggleSelectAllFiltered"
+              />
+              <span>
+                {{
+                  selectedFilteredPhotos.length > 0
+                    ? `${selectedFilteredPhotos.length} of ${filteredPhotos.length} selected`
+                    : `Select All (${filteredPhotos.length})`
+                }}
+              </span>
+            </label>
+
+            <button
+              v-if="selectedFilteredPhotos.length > 0"
+              type="button"
+              class="clear-select-link font-mono"
+              @click="clearPhotoSelection"
+            >
+              Clear
+            </button>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-red btn-compact-delete"
+            :disabled="selectedFilteredPhotos.length === 0 || isDeletingPhotos"
+            data-testid="delete-selected-photos-btn"
+            @click="requestDeleteSelectedPhotos"
+          >
+            <Trash2 :size="16" />
+            <span>
+              {{
+                selectedFilteredPhotos.length > 0
+                  ? `Delete Selected (${selectedFilteredPhotos.length})`
+                  : 'Delete Selected'
+              }}
+            </span>
+          </button>
+        </div>
+
         <!-- Photo Cards -->
         <div
           v-if="filteredPhotos.length > 0"
@@ -692,9 +813,21 @@ function formatDateTime(iso: string): string {
             v-for="photo in filteredPhotos"
             :key="photo.id"
             class="admin-photo-card retro-card"
-            :class="{ moderated: photo.status === 'hidden' }"
+            :class="{
+              moderated: photo.status === 'hidden',
+              selected: isPhotoSelected(photo.id)
+            }"
           >
             <div class="photo-card-top font-mono">
+              <label class="card-select-check" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="isPhotoSelected(photo.id)"
+                  :aria-label="`Select ${photo.filename} for deletion`"
+                  data-testid="select-photo-checkbox"
+                  @change="togglePhotoSelection(photo.id)"
+                />
+              </label>
               <span class="shot-pill">#{{ String(photo.shotNumber).padStart(2, '0') }}/10</span>
               <span class="file-label" :title="photo.filename">{{ photo.filename }}</span>
               <span
@@ -749,7 +882,7 @@ function formatDateTime(iso: string): string {
                   title="Delete photo permanently"
                   aria-label="Delete photo permanently"
                   data-testid="delete-photo-btn"
-                  :disabled="deletingPhotoId === photo.id"
+                  :disabled="isDeletingPhotos"
                   @click="requestDeletePhoto(photo)"
                 >
                   <Trash2 :size="16" />
@@ -1107,7 +1240,7 @@ function formatDateTime(iso: string): string {
               type="button"
               class="btn btn-red"
               data-testid="modal-delete-photo-btn"
-              :disabled="deletingPhotoId === selectedPhotoModal.id"
+              :disabled="isDeletingPhotos"
               @click="requestDeletePhoto(selectedPhotoModal)"
             >
               <Trash2 :size="17" />
@@ -1119,11 +1252,11 @@ function formatDateTime(iso: string): string {
     </Transition>
 
     <!-- =====================================================================
-         CONFIRM DELETE PHOTO MODAL
+         CONFIRM DELETE PHOTO(S) MODAL
          ===================================================================== -->
     <Transition name="fade">
       <div
-        v-if="confirmDeletePhoto"
+        v-if="confirmDeleteTargets.length > 0"
         class="modal-backdrop delete-confirm-backdrop"
         role="dialog"
         aria-modal="true"
@@ -1136,29 +1269,56 @@ function formatDateTime(iso: string): string {
               <Trash2 :size="20" />
             </div>
             <div>
-              <h3>Delete Photo Permanently?</h3>
-              <p>This removes the photo from the event gallery and cannot be undone.</p>
+              <h3>
+                {{
+                  confirmDeleteTargets.length === 1
+                    ? 'Delete Photo Permanently?'
+                    : `Delete ${confirmDeleteTargets.length} Photos Permanently?`
+                }}
+              </h3>
+              <p>
+                {{
+                  confirmDeleteTargets.length === 1
+                    ? 'This removes the photo from the event gallery and cannot be undone.'
+                    : `This removes ${confirmDeleteTargets.length} selected photos from the event gallery and cannot be undone.`
+                }}
+              </p>
             </div>
           </div>
 
-          <div class="confirm-delete-preview">
+          <div v-if="confirmDeleteTargets.length === 1" class="confirm-delete-preview">
             <img
-              :src="confirmDeletePhoto.compressedImage || confirmDeletePhoto.imageUrl"
-              :alt="confirmDeletePhoto.filename"
+              :src="confirmDeleteTargets[0]!.compressedImage || confirmDeleteTargets[0]!.imageUrl"
+              :alt="confirmDeleteTargets[0]!.filename"
             />
             <div class="confirm-delete-meta">
-              <strong>{{ confirmDeletePhoto.guestName }}</strong>
-              <span class="font-mono">{{ confirmDeletePhoto.filename }}</span>
-              <span class="font-mono">{{ formatDateTime(confirmDeletePhoto.capturedAt) }}</span>
+              <strong>{{ confirmDeleteTargets[0]!.guestName }}</strong>
+              <span class="font-mono">{{ confirmDeleteTargets[0]!.filename }}</span>
+              <span class="font-mono">
+                {{ formatDateTime(confirmDeleteTargets[0]!.capturedAt) }}
+              </span>
             </div>
+          </div>
+
+          <div v-else class="confirm-delete-strip">
+            <img
+              v-for="item in confirmDeleteTargets.slice(0, 4)"
+              :key="item.id"
+              :src="item.compressedImage || item.imageUrl"
+              :alt="item.filename"
+              class="strip-thumb"
+            />
+            <span v-if="confirmDeleteTargets.length > 4" class="strip-more font-mono">
+              +{{ confirmDeleteTargets.length - 4 }}
+            </span>
           </div>
 
           <div class="confirm-delete-actions">
             <button
               type="button"
               class="btn btn-outline"
-              :disabled="Boolean(deletingPhotoId)"
-              @click="confirmDeletePhoto = null"
+              :disabled="isDeletingPhotos"
+              @click="cancelDeletePhoto"
             >
               <span>Cancel</span>
             </button>
@@ -1166,11 +1326,19 @@ function formatDateTime(iso: string): string {
               type="button"
               class="btn btn-red"
               data-testid="confirm-delete-photo-btn"
-              :disabled="Boolean(deletingPhotoId)"
+              :disabled="isDeletingPhotos"
               @click="handleDeletePhotoConfirmed"
             >
               <Trash2 :size="16" />
-              <span>{{ deletingPhotoId ? 'Deleting...' : 'Delete Permanently' }}</span>
+              <span>
+                {{
+                  isDeletingPhotos
+                    ? 'Deleting...'
+                    : confirmDeleteTargets.length === 1
+                      ? 'Delete Permanently'
+                      : `Delete ${confirmDeleteTargets.length} Photos`
+                }}
+              </span>
             </button>
           </div>
         </div>
@@ -1611,6 +1779,55 @@ function formatDateTime(iso: string): string {
   }
 }
 
+/* BULK SELECT & DELETE BAR */
+.bulk-select-bar {
+  padding: 0.75rem 1.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.bulk-select-left {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.select-all-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--charcoal);
+  cursor: pointer;
+
+  input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--xmas-red);
+    cursor: pointer;
+  }
+}
+
+.clear-select-link {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--charcoal-muted);
+  text-decoration: underline;
+
+  &:hover {
+    color: var(--xmas-red);
+  }
+}
+
+.btn-compact-delete {
+  padding: 0.52rem 1rem;
+  font-size: 0.85rem;
+}
+
 /* PHOTO GRID & MASONRY */
 .admin-photo-grid {
   display: grid;
@@ -1633,10 +1850,31 @@ function formatDateTime(iso: string): string {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
   &.moderated {
     opacity: 0.55;
     background: var(--bg-cream-muted);
+  }
+
+  &.selected {
+    border-color: var(--xmas-red);
+    box-shadow: 0 0 0 2px rgba(181, 59, 53, 0.25);
+  }
+}
+
+.card-select-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  input {
+    width: 17px;
+    height: 17px;
+    accent-color: var(--xmas-red);
+    cursor: pointer;
   }
 }
 
@@ -1743,6 +1981,8 @@ function formatDateTime(iso: string): string {
 
   &.danger {
     color: var(--xmas-red);
+    background: var(--xmas-red-subtle);
+    border-color: rgba(181, 59, 53, 0.3);
 
     &:hover:not(:disabled) {
       background: var(--xmas-red);
@@ -2141,6 +2381,35 @@ function formatDateTime(iso: string): string {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+}
+
+.confirm-delete-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  background: var(--bg-cream);
+  border: 1px solid var(--charcoal-border);
+  border-radius: var(--radius-md);
+
+  .strip-thumb {
+    width: 52px;
+    height: 78px;
+    object-fit: cover;
+    border-radius: 6px;
+    background: #101211;
+    flex-shrink: 0;
+  }
+
+  .strip-more {
+    margin-left: 0.25rem;
+    padding: 0.35rem 0.65rem;
+    border-radius: var(--radius-pill);
+    background: var(--xmas-red-subtle);
+    color: var(--xmas-red-dark);
+    font-size: 0.78rem;
+    font-weight: 700;
   }
 }
 

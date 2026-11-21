@@ -1,17 +1,10 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  AlertCircle,
-  ArrowRight,
-  Camera,
-  CheckCircle2,
-  KeyRound,
-  UserCheck
-} from 'lucide-vue-next'
-import GuestHeader from '@/components/GuestHeader.vue'
-import { useSessionStore } from '@/stores/sessionStore'
-import type { AttendanceStatus } from '@/types'
+import { AlertCircle, Camera, CheckCircle2, KeyRound } from 'lucide-vue-next'
+import GuestHeader from '../components/GuestHeader.vue'
+import { useSessionStore } from '../stores/sessionStore'
+import type { AttendanceStatus } from '../types'
 
 const sessionStore = useSessionStore()
 const router = useRouter()
@@ -23,9 +16,6 @@ const mode = ref<'register' | 'recover'>(
 
 const form = reactive({
   fullName: '',
-  contactNumber: '',
-  email: '',
-  department: '',
   attendance: 'attending' as AttendanceStatus,
   mediaAgreement: false
 })
@@ -35,21 +25,28 @@ const recoveryForm = reactive({
   verificationInput: ''
 })
 
+const showRecoveryVerification = ref(false)
 const errorMessage = ref('')
 const isSubmitting = ref(false)
 const isGoogleLoading = ref(false)
 const googleLinkedEmail = ref('')
 
-const departmentSuggestions = [
-  'Operations',
-  'Marketing',
-  'Leasing',
-  'Finance',
-  'Engineering',
-  'IT',
-  'HR',
-  'Admin'
-]
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message
+    if (typeof msg === 'string' && msg.trim().length > 0) return msg
+  }
+  return fallback
+}
+
+function switchMode(nextMode: 'register' | 'recover') {
+  mode.value = nextMode
+  errorMessage.value = ''
+  if (nextMode === 'register') {
+    showRecoveryVerification.value = false
+  }
+}
 
 onMounted(async () => {
   if (!sessionStore.isHydrated) {
@@ -60,8 +57,7 @@ onMounted(async () => {
 watch(
   () => route.query.mode,
   (newMode) => {
-    mode.value = newMode === 'recover' ? 'recover' : 'register'
-    errorMessage.value = ''
+    switchMode(newMode === 'recover' ? 'recover' : 'register')
   }
 )
 
@@ -72,13 +68,13 @@ async function handleGoogleGuestSignIn() {
     const profile = await sessionStore.authenticateGuestWithGoogle()
     googleLinkedEmail.value = profile.email
 
-    // Try recovering an existing camera roll if one was already registered under this Google account
+    // Try opening an existing roll linked to this Google account first
     try {
       await sessionStore.recoverExistingGuest(profile.fullName, profile.email)
       router.push('/camera')
       return
     } catch {
-      // No existing registration found yet -> populate the form for quick registration
+      // No existing registration yet -> pre-fill name for quick start
     }
 
     if (mode.value === 'recover') {
@@ -90,11 +86,8 @@ async function handleGoogleGuestSignIn() {
     if (!form.fullName) {
       form.fullName = profile.fullName
     }
-    if (profile.email) {
-      form.email = profile.email
-    }
-  } catch (err: any) {
-    errorMessage.value = err?.message || 'Google Sign-In failed. Please try again.'
+  } catch (err: unknown) {
+    errorMessage.value = extractErrorMessage(err, 'Google Sign-In failed. Please try again.')
   } finally {
     isGoogleLoading.value = false
   }
@@ -106,15 +99,13 @@ async function handleRegistrationSubmit() {
   try {
     await sessionStore.registerNewGuest({
       fullName: form.fullName,
-      contactNumber: form.contactNumber,
-      email: form.email,
-      department: form.department,
+      email: googleLinkedEmail.value || '',
       attendance: form.attendance,
       mediaAgreement: form.mediaAgreement
     })
     router.push('/camera')
-  } catch (err: any) {
-    errorMessage.value = err?.message || 'Registration failed. Please try again.'
+  } catch (err: unknown) {
+    errorMessage.value = extractErrorMessage(err, 'Could not start camera. Please try again.')
   } finally {
     isSubmitting.value = false
   }
@@ -129,8 +120,12 @@ async function handleRecoverySubmit() {
       recoveryForm.verificationInput
     )
     router.push('/camera')
-  } catch (err: any) {
-    errorMessage.value = err?.message || 'Camera session not found.'
+  } catch (err: unknown) {
+    const msg = extractErrorMessage(err, 'We could not find a camera under that name.')
+    if (msg.toLowerCase().includes('verification')) {
+      showRecoveryVerification.value = true
+    }
+    errorMessage.value = msg
   } finally {
     isSubmitting.value = false
   }
@@ -140,200 +135,123 @@ async function handleRecoverySubmit() {
 <template>
   <div class="register-page">
     <GuestHeader />
-    <div class="film-sprocket-bar" aria-hidden="true"></div>
 
     <main class="register-main">
-      <div class="ticket-wrapper retro-card">
-        <div class="ticket-header">
-          <span class="badge badge-red">10 SHOTS INCLUDED</span>
-          <h1>Get Your Camera</h1>
-          <p>{{ sessionStore.event.name }} · {{ sessionStore.event.venue }}</p>
-        </div>
+      <section class="auth-card">
+        <!-- HEADER -->
+        <header class="card-header">
+          <h1>{{ mode === 'register' ? 'Get Your Camera' : 'Welcome Back' }}</h1>
+          <p>
+            {{
+              mode === 'register'
+                ? '10 free disposable camera shots for tonight’s party.'
+                : 'Enter your name to return to your camera.'
+            }}
+          </p>
+        </header>
 
-        <!-- Existing Active Session Notice -->
-        <div v-if="sessionStore.hasActiveGuestSession" class="already-registered-banner">
-          <div class="banner-info">
-            <CheckCircle2 :size="18" class="banner-icon" />
+        <!-- ACTIVE SESSION SHORTCUT -->
+        <div v-if="sessionStore.hasActiveGuestSession" class="active-session-bar">
+          <div class="session-info">
+            <CheckCircle2 :size="18" class="session-icon" />
             <div>
               <strong>{{ sessionStore.guest?.fullName }}</strong>
-              <p>{{ sessionStore.remainingShots }} / {{ sessionStore.totalShots }} shots left</p>
+              <span>{{ sessionStore.remainingShots }} of {{ sessionStore.totalShots }} shots left</span>
             </div>
           </div>
-          <button class="btn btn-primary btn-sm" @click="router.push('/camera')">
-            <Camera :size="16" />
-            <span>Open Camera</span>
+          <button type="button" class="btn btn-primary btn-compact" @click="router.push('/camera')">
+            Open
           </button>
         </div>
 
-        <!-- Mode Tabs -->
-        <div class="mode-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            class="mode-tab"
-            :class="{ active: mode === 'register' }"
-            @click="mode = 'register'; errorMessage = ''"
-          >
-            <UserCheck :size="15" />
-            <span>New Guest</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            class="mode-tab"
-            :class="{ active: mode === 'recover' }"
-            @click="mode = 'recover'; errorMessage = ''"
-          >
-            <KeyRound :size="15" />
-            <span>Already Registered</span>
-          </button>
-        </div>
-
-        <!-- Error Alert -->
-        <div v-if="errorMessage" class="error-banner" role="alert">
+        <!-- ERROR MESSAGE -->
+        <div v-if="errorMessage" class="error-box" role="alert">
           <AlertCircle :size="18" class="err-icon" />
-          <div class="err-body">
+          <div class="err-content">
             <span>{{ errorMessage }}</span>
             <button
-              v-if="mode === 'register' && errorMessage.includes('already registered')"
+              v-if="mode === 'register' && errorMessage.toLowerCase().includes('already registered')"
               type="button"
-              class="inline-recover-btn"
+              class="inline-link"
               @click="
                 recoveryForm.fullName = form.fullName;
-                recoveryForm.verificationInput = form.email || form.contactNumber;
-                mode = 'recover';
-                errorMessage = ''
+                recoveryForm.verificationInput = googleLinkedEmail;
+                switchMode('recover')
               "
             >
-              Tap here to open your existing camera &rarr;
+              Open your existing camera →
             </button>
           </div>
         </div>
 
-        <!-- GOOGLE QUICK SIGN-IN -->
-        <div class="google-auth-section">
-          <button
-            type="button"
-            class="btn google-guest-btn"
-            :disabled="isSubmitting || isGoogleLoading"
-            data-testid="google-guest-signin-btn"
-            @click="handleGoogleGuestSignIn"
-          >
-            <svg class="google-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                fill="#4285F4"
-                d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"
-              />
-            </svg>
-            <span>
-              {{
-                isGoogleLoading
-                  ? 'Connecting with Google...'
-                  : mode === 'recover'
-                    ? 'Open Camera with Google'
-                    : 'Continue with Google'
-              }}
-            </span>
-          </button>
+        <!-- GOOGLE SIGN-IN -->
+        <button
+          type="button"
+          class="google-btn"
+          :disabled="isSubmitting || isGoogleLoading"
+          data-testid="google-guest-signin-btn"
+          @click="handleGoogleGuestSignIn"
+        >
+          <svg class="google-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="#4285F4"
+              d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
+            />
+            <path
+              fill="#34A853"
+              d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
+            />
+            <path
+              fill="#FBBC05"
+              d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
+            />
+            <path
+              fill="#EA4335"
+              d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"
+            />
+          </svg>
+          <span>
+            {{ isGoogleLoading ? 'Connecting...' : 'Continue with Google' }}
+          </span>
+        </button>
 
-          <div v-if="googleLinkedEmail" class="google-linked-pill font-mono">
-            <CheckCircle2 :size="14" />
-            <span>Signed in as {{ googleLinkedEmail }}</span>
-          </div>
-
-          <div class="or-divider font-mono">
-            <span>OR ENTER DETAILS BELOW</span>
-          </div>
+        <div v-if="googleLinkedEmail" class="google-pill">
+          <CheckCircle2 :size="15" />
+          <span>Signed in as {{ googleLinkedEmail }}</span>
         </div>
 
-        <!-- REGISTRATION FORM -->
+        <div class="divider">
+          <span>or</span>
+        </div>
+
+        <!-- NEW GUEST FORM -->
         <form
           v-if="mode === 'register'"
-          class="ticket-form"
+          class="simple-form"
           @submit.prevent="handleRegistrationSubmit"
         >
           <div v-if="!sessionStore.event.registrationOpen" class="closed-notice">
             Registration is currently closed.
           </div>
 
-          <div class="form-group">
-            <label for="fullName" class="form-label">Full Name *</label>
+          <div class="field">
+            <label for="fullName" class="field-label">Your Name</label>
             <input
               id="fullName"
               v-model="form.fullName"
               type="text"
-              class="form-input"
-              placeholder="Enter your full name"
+              class="field-input"
+              placeholder="Enter your name"
               required
               autocomplete="name"
               :disabled="!sessionStore.event.registrationOpen || isSubmitting"
             />
           </div>
 
-          <div class="form-group">
-            <label for="department" class="form-label">Department / Team (Optional)</label>
-            <input
-              id="department"
-              v-model="form.department"
-              type="text"
-              list="dept-options"
-              class="form-input"
-              placeholder="e.g. Marketing, Operations"
-              :disabled="!sessionStore.event.registrationOpen || isSubmitting"
-            />
-            <datalist id="dept-options">
-              <option v-for="dept in departmentSuggestions" :key="dept" :value="dept" />
-            </datalist>
-          </div>
-
-          <div class="form-row-2">
-            <div class="form-group">
-              <label for="contactNumber" class="form-label">Mobile No. (Optional)</label>
-              <input
-                id="contactNumber"
-                v-model="form.contactNumber"
-                type="tel"
-                class="form-input"
-                placeholder="0917 123 4567"
-                autocomplete="tel"
-                :disabled="!sessionStore.event.registrationOpen || isSubmitting"
-              />
-            </div>
-
-            <div class="form-group">
-              <label for="email" class="form-label">Email (Optional)</label>
-              <input
-                id="email"
-                v-model="form.email"
-                type="email"
-                class="form-input"
-                placeholder="you@email.com"
-                autocomplete="email"
-                :disabled="!sessionStore.event.registrationOpen || isSubmitting"
-              />
-            </div>
-          </div>
-
-          <!-- Attendance Confirmation -->
-          <div class="form-group">
-            <span class="form-label">Are You Attending? *</span>
-            <div class="attendance-grid">
-              <label
-                class="attendance-option"
-                :class="{ selected: form.attendance === 'attending' }"
-              >
+          <div class="field">
+            <span class="field-label">Are you attending?</span>
+            <div class="choice-row">
+              <label class="choice-pill" :class="{ active: form.attendance === 'attending' }">
                 <input
                   v-model="form.attendance"
                   type="radio"
@@ -341,13 +259,10 @@ async function handleRecoverySubmit() {
                   value="attending"
                   :disabled="!sessionStore.event.registrationOpen || isSubmitting"
                 />
-                <span class="att-title">🎉 Yes, Attending</span>
+                <span>Yes, attending</span>
               </label>
 
-              <label
-                class="attendance-option"
-                :class="{ selected: form.attendance === 'not_attending' }"
-              >
+              <label class="choice-pill" :class="{ active: form.attendance === 'not_attending' }">
                 <input
                   v-model="form.attendance"
                   type="radio"
@@ -355,22 +270,19 @@ async function handleRecoverySubmit() {
                   value="not_attending"
                   :disabled="!sessionStore.event.registrationOpen || isSubmitting"
                 />
-                <span class="att-title">💌 Not Attending</span>
+                <span>Not attending</span>
               </label>
             </div>
           </div>
 
-          <!-- Media Agreement -->
-          <label class="agreement-box">
+          <label class="consent-row">
             <input
               v-model="form.mediaAgreement"
               type="checkbox"
               required
               :disabled="!sessionStore.event.registrationOpen || isSubmitting"
             />
-            <span class="agreement-text">
-              I agree to share my photos in the Christmas party gallery &amp; slideshow. *
-            </span>
+            <span>I agree to share my photos in the party gallery.</span>
           </label>
 
           <button
@@ -378,41 +290,35 @@ async function handleRecoverySubmit() {
             class="btn btn-red submit-btn"
             :disabled="!sessionStore.event.registrationOpen || isSubmitting"
           >
-            <Camera :size="19" />
-            <span>{{ isSubmitting ? 'Loading Camera...' : 'Start Camera (10 Shots)' }}</span>
-            <ArrowRight :size="18" />
+            <Camera :size="18" />
+            <span>{{ isSubmitting ? 'Starting...' : 'Start Camera' }}</span>
           </button>
         </form>
 
-        <!-- RECOVER EXISTING CAMERA FORM -->
-        <form v-else class="ticket-form" @submit.prevent="handleRecoverySubmit">
-          <p class="recovery-intro">
-            Enter the name you registered with to return to your camera.
-          </p>
-
-          <div class="form-group">
-            <label for="recoverName" class="form-label">Full Name *</label>
+        <!-- RETURNING GUEST FORM -->
+        <form v-else class="simple-form" @submit.prevent="handleRecoverySubmit">
+          <div class="field">
+            <label for="recoverName" class="field-label">Your Name</label>
             <input
               id="recoverName"
               v-model="recoveryForm.fullName"
               type="text"
-              class="form-input"
-              placeholder="Your registered name"
+              class="field-input"
+              placeholder="Name you registered with"
               required
+              autocomplete="name"
               :disabled="isSubmitting"
             />
           </div>
 
-          <div class="form-group">
-            <label for="recoverVerify" class="form-label">
-              Mobile No. or Email (if provided)
-            </label>
+          <div v-if="showRecoveryVerification" class="field">
+            <label for="recoverVerify" class="field-label">Email or Phone Used</label>
             <input
               id="recoverVerify"
               v-model="recoveryForm.verificationInput"
               type="text"
-              class="form-input"
-              placeholder="Optional verification"
+              class="field-input"
+              placeholder="Enter email or phone"
               :disabled="isSubmitting"
             />
           </div>
@@ -422,7 +328,23 @@ async function handleRecoverySubmit() {
             <span>{{ isSubmitting ? 'Opening...' : 'Open My Camera' }}</span>
           </button>
         </form>
-      </div>
+
+        <!-- SIMPLE FOOTER MODE SWITCH -->
+        <footer class="card-footer">
+          <template v-if="mode === 'register'">
+            <span>Already registered?</span>
+            <button type="button" class="footer-link" @click="switchMode('recover')">
+              Open my camera
+            </button>
+          </template>
+          <template v-else>
+            <span>New here?</span>
+            <button type="button" class="footer-link" @click="switchMode('register')">
+              Get a camera
+            </button>
+          </template>
+        </footer>
+      </section>
     </main>
   </div>
 </template>
@@ -437,196 +359,162 @@ async function handleRecoverySubmit() {
 
 .register-main {
   flex: 1;
-  max-width: 520px;
   width: 100%;
+  max-width: 440px;
   margin: 0 auto;
-  padding: 1rem 0.85rem 2.5rem;
+  padding: 1.5rem 1rem 3rem;
+  display: flex;
+  align-items: center;
 }
 
-.ticket-wrapper {
-  padding: 1.35rem 1.15rem;
-  border-top: 5px solid var(--forest-green);
+.auth-card {
+  width: 100%;
+  background: var(--bg-cream-elevated);
+  border: 1px solid var(--charcoal-border);
+  border-radius: 20px;
+  padding: 1.75rem 1.4rem;
+  box-shadow: 0 10px 30px -12px rgba(24, 61, 50, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
 }
 
-.ticket-header {
-  margin-bottom: 1.1rem;
+.card-header {
+  text-align: center;
 
   h1 {
-    font-size: 1.65rem;
+    font-size: 1.7rem;
     color: var(--forest-green);
-    margin: 0.35rem 0 0.15rem;
+    line-height: 1.15;
   }
 
   p {
+    margin-top: 0.35rem;
+    font-size: 0.9rem;
     color: var(--charcoal-muted);
-    font-size: 0.85rem;
   }
 }
 
-.already-registered-banner {
+.active-session-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.75rem 0.9rem;
-  border-radius: var(--radius-md);
+  border-radius: 12px;
   background: var(--forest-green-subtle);
-  border: 1px solid rgba(24, 61, 50, 0.25);
-  margin-bottom: 1rem;
-
-  .banner-info {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-
-    .banner-icon {
-      color: var(--forest-green);
-      flex-shrink: 0;
-    }
-
-    strong {
-      display: block;
-      font-size: 0.88rem;
-      color: var(--forest-green);
-    }
-
-    p {
-      font-size: 0.76rem;
-      color: var(--charcoal-soft);
-    }
-  }
 }
 
-.btn-sm {
-  padding: 0.45rem 0.85rem;
-  font-size: 0.82rem;
-}
-
-.mode-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.35rem;
-  background: var(--bg-cream-muted);
-  padding: 0.3rem;
-  border-radius: var(--radius-md);
-  margin-bottom: 1.1rem;
-}
-
-.mode-tab {
+.session-info {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  min-height: 40px;
-  padding: 0.5rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--charcoal-soft);
+  gap: 0.55rem;
+  min-width: 0;
 
-  &.active {
-    background: var(--bg-cream-elevated);
+  .session-icon {
     color: var(--forest-green);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    flex-shrink: 0;
+  }
+
+  strong {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--forest-green);
+    line-height: 1.2;
+  }
+
+  span {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--charcoal-soft);
   }
 }
 
-.error-banner {
+.btn-compact {
+  padding: 0.45rem 0.95rem;
+  font-size: 0.84rem;
+}
+
+.error-box {
   display: flex;
   align-items: flex-start;
-  gap: 0.55rem;
-  padding: 0.8rem 0.9rem;
-  border-radius: var(--radius-md);
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 12px;
   background: var(--xmas-red-subtle);
-  border: 1px solid rgba(181, 59, 53, 0.35);
   color: var(--xmas-red-dark);
-  font-size: 0.84rem;
-  margin-bottom: 1rem;
+  font-size: 0.85rem;
 
   .err-icon {
     flex-shrink: 0;
-    margin-top: 1px;
+    margin-top: 2px;
   }
 
-  .err-body {
+  .err-content {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.3rem;
   }
 
-  .inline-recover-btn {
+  .inline-link {
     align-self: flex-start;
     font-weight: 700;
-    font-size: 0.8rem;
+    font-size: 0.82rem;
     color: var(--forest-green);
     text-decoration: underline;
   }
 }
 
-.closed-notice {
-  padding: 0.75rem 0.9rem;
-  background: var(--muted-gold-subtle);
-  border: 1px solid var(--muted-gold);
-  border-radius: var(--radius-md);
-  font-size: 0.84rem;
-  margin-bottom: 1rem;
-}
-
-.google-auth-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  margin-bottom: 0.85rem;
-}
-
-.google-guest-btn {
+.google-btn {
   width: 100%;
-  min-height: 46px;
+  min-height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.65rem;
-  background: #ffffff;
+  background: #fff;
   color: #1f1f1f;
   border: 1.5px solid var(--charcoal-border);
-  border-radius: var(--radius-md);
-  font-weight: 700;
-  font-size: 0.92rem;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
-  transition: all 0.15s ease;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.94rem;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 
   &:hover:not(:disabled) {
-    background: #f8f9fa;
+    background: #fafafa;
     border-color: var(--forest-green);
-    transform: translateY(-1px);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .google-icon {
-    width: 18px;
-    height: 18px;
+    width: 19px;
+    height: 19px;
     flex-shrink: 0;
   }
 }
 
-.google-linked-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.74rem;
-  color: var(--forest-green);
-  background: var(--forest-green-subtle);
-  border: 1px solid rgba(24, 61, 50, 0.25);
-  padding: 0.45rem 0.75rem;
-  border-radius: var(--radius-sm);
-}
-
-.or-divider {
+.google-pill {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  font-size: 0.68rem;
+  justify-content: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--forest-green);
+  background: var(--forest-green-subtle);
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.8rem;
   color: var(--charcoal-muted);
-  letter-spacing: 0.05em;
 
   &::before,
   &::after {
@@ -637,91 +525,127 @@ async function handleRecoverySubmit() {
   }
 }
 
-.form-row-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
+.simple-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
-.attendance-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.6rem;
+.closed-notice {
+  padding: 0.7rem 0.85rem;
+  background: var(--muted-gold-subtle);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  color: #7c5819;
+  text-align: center;
 }
 
-.attendance-option {
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.field-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--charcoal);
+}
+
+.field-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.75rem 0.95rem;
+  background: #fff;
+  border: 1.5px solid var(--charcoal-border);
+  border-radius: 12px;
+  color: var(--charcoal);
+  font-size: 0.96rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &:focus {
+    outline: none;
+    border-color: var(--forest-green);
+    box-shadow: 0 0 0 3px rgba(24, 61, 50, 0.12);
+  }
+
+  &::placeholder {
+    color: var(--charcoal-muted);
+    opacity: 0.7;
+  }
+}
+
+.choice-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.choice-pill {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 46px;
-  padding: 0.65rem 0.75rem;
-  border-radius: var(--radius-md);
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
   border: 1.5px solid var(--charcoal-border);
-  background: var(--bg-cream);
+  background: #fff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--charcoal-soft);
   cursor: pointer;
-  text-align: center;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 
   input {
     display: none;
   }
 
-  .att-title {
-    font-weight: 700;
-    font-size: 0.86rem;
-    color: var(--charcoal);
-  }
-
-  &.selected {
+  &.active {
     border-color: var(--forest-green);
-    background: var(--forest-green-subtle);
-
-    .att-title {
-      color: var(--forest-green);
-    }
+    background: var(--forest-green);
+    color: var(--bg-cream);
   }
 }
 
-.agreement-box {
+.consent-row {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0.75rem 0.85rem;
-  background: var(--bg-cream);
-  border: 1px solid var(--charcoal-border);
-  border-radius: var(--radius-md);
-  margin: 0.25rem 0 1.1rem;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--charcoal-soft);
   cursor: pointer;
+  padding: 0.15rem 0;
 
   input {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     accent-color: var(--forest-green);
     flex-shrink: 0;
-  }
-
-  .agreement-text {
-    font-size: 0.82rem;
-    color: var(--charcoal-soft);
-    line-height: 1.35;
+    cursor: pointer;
   }
 }
 
 .submit-btn {
   width: 100%;
   min-height: 50px;
-  font-size: 1rem;
+  font-size: 0.98rem;
+  border-radius: 12px;
 }
 
-.recovery-intro {
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding-top: 0.25rem;
   font-size: 0.86rem;
-  color: var(--charcoal-soft);
-  margin-bottom: 1rem;
+  color: var(--charcoal-muted);
 }
 
-@media (max-width: 520px) {
-  .form-row-2 {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
+.footer-link {
+  font-weight: 700;
+  color: var(--forest-green);
+  text-decoration: underline;
 }
 </style>
